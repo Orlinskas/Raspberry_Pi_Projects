@@ -36,7 +36,7 @@ class BrainConfig:
 
     state_path: Path = Path(__file__).with_name("state.json")
     command_path: Path = Path(__file__).with_name("command.json")
-    obstacle_distance_cm: float = 25.0
+    obstacle_distance_cm: float = 30.0
     camera_confidence_threshold: float = 0.7
     target_deadband: float = 0.25
 

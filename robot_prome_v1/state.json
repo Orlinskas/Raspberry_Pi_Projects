@@ -16,7 +16,7 @@
     "command_id": "cmd_000000",
     "action": "STOP",
     "speed": 0,
-    "working_time_ms": 0,
+    "duration_ms": 0,
     "reason": "initial_state",
     "updated_at": 0.0
   }

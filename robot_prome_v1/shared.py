@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,7 @@ SCHEMA_VERSION = "1.0"
 ACTIONS = {"FORWARD", "BACKWARD", "TURN_LEFT", "TURN_RIGHT", "STOP"}
 
 PathLike = Union[str, Path]
+GPIO_LOCK = threading.RLock()
 
 
 def zero_state_payload() -> Dict[str, Any]:

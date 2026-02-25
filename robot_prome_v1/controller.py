@@ -58,7 +58,7 @@ except ImportError:  # pragma: no cover
 
     GPIO = _MockGPIO()
 
-from shared import RobotCommand, read_json
+from shared import GPIO_LOCK, RobotCommand, read_json
 
 # GPIO-пины моторов (BCM)
 IN1, IN2, IN3, IN4 = 20, 21, 19, 26
@@ -77,20 +77,21 @@ _ACTION_UNTIL_TS = 0.0
 def setup():
     """Инициализация GPIO и PWM."""
     global pwm_ena, pwm_enb
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setwarnings(False)
+    with GPIO_LOCK:
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setwarnings(False)
 
-    GPIO.setup(ENA, GPIO.OUT, initial=GPIO.HIGH)
-    GPIO.setup(ENB, GPIO.OUT, initial=GPIO.HIGH)
-    GPIO.setup(IN1, GPIO.OUT, initial=GPIO.LOW)
-    GPIO.setup(IN2, GPIO.OUT, initial=GPIO.LOW)
-    GPIO.setup(IN3, GPIO.OUT, initial=GPIO.LOW)
-    GPIO.setup(IN4, GPIO.OUT, initial=GPIO.LOW)
+        GPIO.setup(ENA, GPIO.OUT, initial=GPIO.HIGH)
+        GPIO.setup(ENB, GPIO.OUT, initial=GPIO.HIGH)
+        GPIO.setup(IN1, GPIO.OUT, initial=GPIO.LOW)
+        GPIO.setup(IN2, GPIO.OUT, initial=GPIO.LOW)
+        GPIO.setup(IN3, GPIO.OUT, initial=GPIO.LOW)
+        GPIO.setup(IN4, GPIO.OUT, initial=GPIO.LOW)
 
-    pwm_ena = GPIO.PWM(ENA, 2000)
-    pwm_enb = GPIO.PWM(ENB, 2000)
-    pwm_ena.start(0)
-    pwm_enb.start(0)
+        pwm_ena = GPIO.PWM(ENA, 2000)
+        pwm_enb = GPIO.PWM(ENB, 2000)
+        pwm_ena.start(0)
+        pwm_enb.start(0)
 
 
 def forward():
@@ -144,14 +145,15 @@ def stop():
 def cleanup():
     """Безопасная деинициализация GPIO."""
     global pwm_ena, pwm_enb
-    stop()
-    if pwm_ena is not None:
-        pwm_ena.stop()
-        pwm_ena = None
-    if pwm_enb is not None:
-        pwm_enb.stop()
-        pwm_enb = None
-    GPIO.cleanup()
+    with GPIO_LOCK:
+        stop()
+        if pwm_ena is not None:
+            pwm_ena.stop()
+            pwm_ena = None
+        if pwm_enb is not None:
+            pwm_enb.stop()
+            pwm_enb = None
+        GPIO.cleanup()
 
 
 def _clamp_speed(value, fallback):
