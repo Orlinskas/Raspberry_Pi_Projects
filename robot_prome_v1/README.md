@@ -53,6 +53,18 @@ flowchart TD
     feelingsModule -->|"обновляет feelings"| stateFile
 ```
 
+### Шаги цикла
+
+```mermaid
+flowchart LR
+    step1["1) vision: генерирует новый state_id и пишет state.json"]
+    step2["2) brain: читает новый state и создает command.json"]
+    step3["3) controller: исполняет command (speed + duration_ms)"]
+    step4["4) feelings: переносит текущую команду в state.feelings"]
+
+    step1 --> step2 --> step3 --> step4 --> step1
+```
+
 ## Формат `state.json`
 
 `state.json` содержит входы сенсоров + блок `feelings`:
