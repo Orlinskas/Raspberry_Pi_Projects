@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0",
+  "state_id": "st_000000",
+  "timestamp": 0.0,
+  "proximity": {
+    "distance_cm": null,
+    "valid": false
+  },
+  "camera": {
+    "obstacle": false,
+    "target_x": null,
+    "confidence": 0.0,
+    "valid": false
+  }
+}
