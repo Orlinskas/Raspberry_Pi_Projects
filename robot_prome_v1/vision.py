@@ -5,22 +5,24 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import json
 import logging
 import statistics
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Deque, Optional, Protocol, Tuple
+from typing import Any, Deque, Dict, Optional, Protocol, Tuple
 
 from shared import GPIO_LOCK, CameraState, FeelingsState, ProximityState, RobotState, atomic_write_json, now_ts, read_json
 
 LOGGER = logging.getLogger("vision")
 STATE_PATH = Path(__file__).with_name("protocol") / "state.json"
 CAPTURE_DIR = Path(__file__).with_name("captures")
-
-INTERVAL_S = 5
 
 ECHO_PIN = 0
 TRIG_PIN = 1
@@ -35,6 +37,13 @@ CAMERA_FPS = 30.0
 CAMERA_WARMUP_S = 1.0
 CAPTURE_KEEP_LAST = 30
 
+OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_MODEL = "moondream:latest"
+OLLAMA_TIMEOUT_S = 8.0
+OLLAMA_TEMPERATURE = 0.0
+OLLAMA_NUM_PREDICT = 96
+OLLAMA_KEEP_ALIVE = "15m"
+
 try:
     import RPi.GPIO as GPIO
 except ImportError:  # pragma: no cover
@@ -44,6 +53,15 @@ try:
     import cv2
 except ImportError:  # pragma: no cover
     cv2 = None
+
+
+@dataclass
+class CameraObservation:
+    """Нормализованный результат camera + vision модели."""
+
+    obstacle_cm: Optional[float]
+    description: Optional[str]
+    target_x: Optional[float]
 
 
 class ProximitySensor(Protocol):
@@ -56,7 +74,7 @@ class ProximitySensor(Protocol):
 class CameraDetector(Protocol):
     """Интерфейс обработки кадра с камеры."""
 
-    def read_observation(self, state_id: str) -> Optional[Tuple[bool, Optional[float], float]]:
+    def read_observation(self, state_id: str) -> Optional[CameraObservation]:
         ...
 
     def get_last_image_path(self) -> Optional[str]:
@@ -128,7 +146,7 @@ class UltrasonicProximitySensor:
 class MockCameraDetector:
     """Заглушка камеры: не подмешивает данные в решения brain."""
 
-    def read_observation(self, state_id: str) -> Optional[Tuple[bool, Optional[float], float]]:
+    def read_observation(self, state_id: str) -> Optional[CameraObservation]:
         _ = state_id
         return None
 
@@ -150,6 +168,12 @@ class OpenCVCameraDetector:
         height: int = CAMERA_HEIGHT,
         fps: float = CAMERA_FPS,
         keep_last: int = CAPTURE_KEEP_LAST,
+        ollama_base_url: str = OLLAMA_BASE_URL,
+        ollama_model: str = OLLAMA_MODEL,
+        ollama_timeout_s: float = OLLAMA_TIMEOUT_S,
+        ollama_temperature: float = OLLAMA_TEMPERATURE,
+        ollama_num_predict: int = OLLAMA_NUM_PREDICT,
+        ollama_keep_alive: str = OLLAMA_KEEP_ALIVE,
     ) -> None:
         self._capture_dir = capture_dir
         self._camera_index = camera_index
@@ -157,6 +181,12 @@ class OpenCVCameraDetector:
         self._height = height
         self._fps = fps
         self._keep_last = max(1, int(keep_last))
+        self._ollama_base_url = str(ollama_base_url).rstrip("/")
+        self._ollama_model = str(ollama_model)
+        self._ollama_timeout_s = max(0.1, float(ollama_timeout_s))
+        self._ollama_temperature = max(0.0, float(ollama_temperature))
+        self._ollama_num_predict = max(1, int(ollama_num_predict))
+        self._ollama_keep_alive = str(ollama_keep_alive)
         self._cap = None
         self._last_image_path: Optional[str] = None
         self._open_warning_logged = False
@@ -189,7 +219,125 @@ class OpenCVCameraDetector:
         self._open_warning_logged = False
         return True
 
-    def read_observation(self, state_id: str) -> Optional[Tuple[bool, Optional[float], float]]:
+    @staticmethod
+    def _vision_system_prompt() -> str:
+        return (
+            "You are a camera perception engine for a mobile robot. "
+            "Return ONLY one JSON object with keys: obstacle_cm, description, target_x. "
+            "obstacle_cm is numeric centimeters or null. "
+            "description is short object scene summary (5-15 words) or null. "
+            "target_x is number in range -1.0..1.0 where -1 is left, 0 center, 1 right; or null if unknown. "
+            "No markdown, no extra keys."
+        )
+
+    @staticmethod
+    def _vision_user_prompt(state_id: str) -> str:
+        payload = {
+            "state_id": state_id,
+            "task": (
+                "Estimate front obstacle distance in cm, short scene description, and horizontal target_x."
+            ),
+        }
+        return json.dumps(payload, ensure_ascii=True, sort_keys=True)
+
+    def _request_ollama(self, image_path: Path, state_id: str) -> Optional[Dict[str, Any]]:
+        started_at = time.perf_counter()
+
+        def elapsed_s() -> float:
+            return time.perf_counter() - started_at
+
+        try:
+            image_b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
+        except OSError as exc:
+            LOGGER.warning("Не удалось прочитать снимок для Ollama: %s", exc)
+            return None
+
+        request_payload = {
+            "model": self._ollama_model,
+            "stream": False,
+            "format": "json",
+            "keep_alive": self._ollama_keep_alive,
+            "options": {
+                "temperature": self._ollama_temperature,
+                "num_predict": self._ollama_num_predict,
+            },
+            "messages": [
+                {"role": "system", "content": self._vision_system_prompt()},
+                {
+                    "role": "user",
+                    "content": self._vision_user_prompt(state_id),
+                    "images": [image_b64],
+                },
+            ],
+        }
+        body = json.dumps(request_payload).encode("utf-8")
+        req = urllib.request.Request(
+            url=self._ollama_base_url + "/api/chat",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._ollama_timeout_s) as response:
+                raw = response.read().decode("utf-8", errors="replace")
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            LOGGER.warning("Vision Ollama request failed in %.3f s (state_id=%s): %s", elapsed_s(), state_id, exc)
+            return None
+
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError:
+            LOGGER.warning("Vision Ollama returned non-JSON payload in %.3f s (state_id=%s)", elapsed_s(), state_id)
+            return None
+        if not isinstance(decoded, dict):
+            return None
+
+        message = decoded.get("message", {})
+        if not isinstance(message, dict):
+            return None
+        content = message.get("content")
+        if not isinstance(content, str):
+            return None
+
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            LOGGER.warning("Vision model content is not valid JSON in %.3f s (state_id=%s)", elapsed_s(), state_id)
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        LOGGER.info("Vision Ollama response time: %.3f s (model=%s state_id=%s)", elapsed_s(), self._ollama_model, state_id)
+        return parsed
+
+    @staticmethod
+    def _normalize_vision_payload(payload: Dict[str, Any]) -> CameraObservation:
+        obstacle_cm = payload.get("obstacle_cm")
+        try:
+            obstacle_cm = float(obstacle_cm) if obstacle_cm is not None else None
+        except (TypeError, ValueError):
+            obstacle_cm = None
+        if obstacle_cm is not None:
+            obstacle_cm = max(0.0, obstacle_cm)
+
+        description = payload.get("description")
+        if description is not None:
+            description = str(description).strip() or None
+
+        target_x = payload.get("target_x")
+        try:
+            target_x = float(target_x) if target_x is not None else None
+        except (TypeError, ValueError):
+            target_x = None
+        if target_x is not None:
+            target_x = max(-1.0, min(1.0, target_x))
+
+        return CameraObservation(
+            obstacle_cm=obstacle_cm,
+            description=description,
+            target_x=target_x,
+        )
+
+    def read_observation(self, state_id: str) -> Optional[CameraObservation]:
         self._last_image_path = None
         if not self._ensure_open():
             return None
@@ -208,7 +356,17 @@ class OpenCVCameraDetector:
 
         _prune_capture_images(self._capture_dir, keep_last=self._keep_last)
         self._last_image_path = str(image_path.resolve())
-        return False, None, 1.0
+        model_payload = self._request_ollama(
+            image_path=image_path,
+            state_id=state_id,
+        )
+        if model_payload is None:
+            return CameraObservation(
+                obstacle_cm=None,
+                description=None,
+                target_x=None,
+            )
+        return self._normalize_vision_payload(model_payload)
 
     def get_last_image_path(self) -> Optional[str]:
         return self._last_image_path
@@ -221,11 +379,16 @@ class OpenCVCameraDetector:
 
 @dataclass
 class VisionConfig:
-    """Конфигурация цикла vision (только частота генерации state)."""
+    """Конфигурация синхронного vision-цикла."""
 
-    interval_s: float = INTERVAL_S
     capture_dir: Path = CAPTURE_DIR
     capture_keep_last: int = CAPTURE_KEEP_LAST
+    ollama_base_url: str = OLLAMA_BASE_URL
+    ollama_model: str = OLLAMA_MODEL
+    ollama_timeout_s: float = OLLAMA_TIMEOUT_S
+    ollama_temperature: float = OLLAMA_TEMPERATURE
+    ollama_num_predict: int = OLLAMA_NUM_PREDICT
+    ollama_keep_alive: str = OLLAMA_KEEP_ALIVE
 
 
 def build_sensors(config: VisionConfig) -> Tuple[ProximitySensor, CameraDetector]:
@@ -233,7 +396,16 @@ def build_sensors(config: VisionConfig) -> Tuple[ProximitySensor, CameraDetector
         LOGGER.error("cv2 не найден, используется MockCameraDetector")
         camera: CameraDetector = MockCameraDetector()
     else:
-        camera = OpenCVCameraDetector(capture_dir=config.capture_dir, keep_last=config.capture_keep_last)
+        camera = OpenCVCameraDetector(
+            capture_dir=config.capture_dir,
+            keep_last=config.capture_keep_last,
+            ollama_base_url=config.ollama_base_url,
+            ollama_model=config.ollama_model,
+            ollama_timeout_s=config.ollama_timeout_s,
+            ollama_temperature=config.ollama_temperature,
+            ollama_num_predict=config.ollama_num_predict,
+            ollama_keep_alive=config.ollama_keep_alive,
+        )
     return UltrasonicProximitySensor(), camera
 
 
@@ -280,27 +452,24 @@ def _build_state(state_counter: int, proximity: ProximitySensor, camera: CameraD
     state_id = f"st_{state_counter:06d}"
     ts = now_ts()
 
-    proximity_state = ProximityState(valid=False)
-    camera_state = CameraState(valid=False)
-
-    try:
-        proximity_state = ProximityState(distance_cm=proximity.read_distance_cm(), valid=True)
-    except Exception as exc:  # pragma: no cover
-        LOGGER.warning("Ошибка чтения датчика приближения: %s", exc)
+    proximity_state = ProximityState()
+    camera_state = CameraState()
 
     try:
         observation = camera.read_observation(state_id)
         if observation is not None:
-            obstacle, target_x, confidence = observation
             camera_state = CameraState(
-                obstacle=obstacle,
-                target_x=target_x,
-                confidence=confidence,
-                image_path=camera.get_last_image_path(),
-                valid=True,
+                obstacle_cm=observation.obstacle_cm,
+                description=observation.description,
+                target_x=observation.target_x,
             )
     except Exception as exc:  # pragma: no cover
         LOGGER.error("Ошибка чтения камеры: %s", exc)
+
+    try:
+        proximity_state = ProximityState(obstacle_cm=proximity.read_distance_cm())
+    except Exception as exc:  # pragma: no cover
+        LOGGER.warning("Ошибка чтения датчика приближения: %s", exc)
 
     return RobotState(
         state_id=state_id,
@@ -311,12 +480,12 @@ def _build_state(state_counter: int, proximity: ProximitySensor, camera: CameraD
 
 
 def run_vision_loop(config: VisionConfig, stop_event: Optional[threading.Event] = None) -> None:
-    """Основной цикл vision: publish state.json по таймеру."""
+    """Основной цикл vision: синхронный capture -> LLM -> ultrasonic -> state write."""
     stop_event = stop_event or threading.Event()
     _clear_capture_images(config.capture_dir)
     proximity, camera = build_sensors(config)
     counter = 0
-    LOGGER.info("Vision запущен. state_path=%s interval=%.2fs", STATE_PATH, config.interval_s)
+    LOGGER.info("Vision запущен. state_path=%s mode=sync", STATE_PATH)
 
     try:
         while not stop_event.is_set():
@@ -328,8 +497,7 @@ def run_vision_loop(config: VisionConfig, stop_event: Optional[threading.Event] 
                 if isinstance(last_command_payload, dict):
                     state.last_command = FeelingsState.from_dict(last_command_payload)
             atomic_write_json(STATE_PATH, state.to_dict())
-            LOGGER.debug("Опубликован state_id=%s", state.state_id)
-            stop_event.wait(config.interval_s)
+            LOGGER.info("STATE written: state_id=%s camera=%s sensor=%s", state.state_id, state.camera.to_dict(), state.sensor.to_dict())
     finally:
         camera.close()
         LOGGER.info("Vision остановлен")
@@ -337,8 +505,21 @@ def run_vision_loop(config: VisionConfig, stop_event: Optional[threading.Event] 
 
 def parse_args() -> VisionConfig:
     parser = argparse.ArgumentParser(description="Vision module")
-    _ = parser.parse_args()
-    return VisionConfig()
+    parser.add_argument("--capture-keep-last", type=int, default=VisionConfig.capture_keep_last, help="Сколько последних снимков хранить")
+    parser.add_argument("--ollama-base-url", default=VisionConfig.ollama_base_url, help="Ollama URL, e.g. http://localhost:11434")
+    parser.add_argument("--ollama-model", default=VisionConfig.ollama_model, help="Быстрая vision модель в Ollama (default: moondream:latest)")
+    parser.add_argument("--ollama-timeout-s", type=float, default=VisionConfig.ollama_timeout_s, help="Timeout запроса vision модели")
+    parser.add_argument("--ollama-temperature", type=float, default=VisionConfig.ollama_temperature, help="Sampling temperature для vision модели")
+    parser.add_argument("--ollama-num-predict", type=int, default=VisionConfig.ollama_num_predict, help="Макс. токенов в ответе vision модели")
+    args = parser.parse_args()
+    return VisionConfig(
+        capture_keep_last=max(1, int(args.capture_keep_last)),
+        ollama_base_url=str(args.ollama_base_url),
+        ollama_model=str(args.ollama_model),
+        ollama_timeout_s=max(0.1, float(args.ollama_timeout_s)),
+        ollama_temperature=max(0.0, float(args.ollama_temperature)),
+        ollama_num_predict=max(1, int(args.ollama_num_predict)),
+    )
 
 
 def main() -> None:

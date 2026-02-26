@@ -31,14 +31,12 @@ def zero_state_payload() -> Dict[str, Any]:
         "state_id": "st_000000",
         "timestamp": 0.0,
         "sensor": {
-            "distance_cm": None,
-            "valid": False,
+            "obstacle_cm": None,
         },
         "camera": {
-            "obstacle": False,
+            "obstacle_cm": None,
+            "description": None,
             "target_x": None,
-            "confidence": 0.0,
-            "valid": False,
         },
         "last_command": {
             "last_action": "STOP",
@@ -46,7 +44,6 @@ def zero_state_payload() -> Dict[str, Any]:
             "remaining_ms": 0,
         },
     }
-
 
 def zero_command_payload() -> Dict[str, Any]:
     """Возвращает нулевую команду STOP."""
@@ -111,49 +108,57 @@ def read_json(path: PathLike) -> Optional[Dict[str, Any]]:
 class ProximityState:
     """Состояние датчика приближения."""
 
-    distance_cm: Optional[float] = None
-    valid: bool = False
+    obstacle_cm: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"distance_cm": self.distance_cm, "valid": self.valid}
+        return {"obstacle_cm": self.obstacle_cm}
 
     @classmethod
     def from_dict(cls, payload: Dict[str, Any]) -> "ProximityState":
-        return cls(distance_cm=payload.get("distance_cm"), valid=bool(payload.get("valid", False)))
+        obstacle_cm = payload.get("obstacle_cm", payload.get("distance_cm"))
+        try:
+            obstacle_cm = float(obstacle_cm) if obstacle_cm is not None else None
+        except (TypeError, ValueError):
+            obstacle_cm = None
+        return cls(obstacle_cm=obstacle_cm if obstacle_cm is None else max(0.0, obstacle_cm))
 
 
 @dataclass
 class CameraState:
     """Состояние камеры/детектора."""
 
-    obstacle: bool = False
+    obstacle_cm: Optional[float] = None
+    description: Optional[str] = None
     target_x: Optional[float] = None
-    confidence: float = 0.0
-    image_path: Optional[str] = None
-    valid: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "obstacle": self.obstacle,
+            "obstacle_cm": self.obstacle_cm,
+            "description": self.description,
             "target_x": self.target_x,
-            "confidence": self.confidence,
-            "image_path": self.image_path,
-            "valid": self.valid,
         }
 
     @classmethod
     def from_dict(cls, payload: Dict[str, Any]) -> "CameraState":
-        confidence = payload.get("confidence", 0.0)
+        obstacle_cm = payload.get("obstacle_cm")
         try:
-            confidence = float(confidence)
+            obstacle_cm = float(obstacle_cm) if obstacle_cm is not None else None
         except (TypeError, ValueError):
-            confidence = 0.0
+            obstacle_cm = None
+        target_x = payload.get("target_x")
+        try:
+            target_x = float(target_x) if target_x is not None else None
+        except (TypeError, ValueError):
+            target_x = None
+        if target_x is not None:
+            target_x = max(-1.0, min(1.0, target_x))
+        description = payload.get("description")
+        if description is not None:
+            description = str(description).strip() or None
         return cls(
-            obstacle=bool(payload.get("obstacle", False)),
-            target_x=payload.get("target_x"),
-            confidence=max(0.0, min(1.0, confidence)),
-            image_path=payload.get("image_path"),
-            valid=bool(payload.get("valid", False)),
+            obstacle_cm=obstacle_cm if obstacle_cm is None else max(0.0, obstacle_cm),
+            description=description,
+            target_x=target_x,
         )
 
 

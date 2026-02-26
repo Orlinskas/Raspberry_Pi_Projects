@@ -2,15 +2,12 @@
   "state_id": "st_000001",
   "timestamp": 1772076801.14149,
   "sensor": {
-    "distance_cm": null,
-    "valid": false
+    "obstacle_cm": null
   },
   "camera": {
-    "obstacle": false,
-    "target_x": null,
-    "confidence": 0.0,
-    "image_path": null,
-    "valid": false
+    "obstacle_cm": null,
+    "description": null,
+    "target_x": null
   },
   "last_command": {
     "last_action": "STOP",
