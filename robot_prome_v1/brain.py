@@ -42,11 +42,11 @@ class BrainConfig:
     state_path: Path = Path(__file__).with_name("protocol") / "state.json"
     command_path: Path = Path(__file__).with_name("protocol") / "command.json"
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://192.168.0.18:11434")
-    ollama_model: str = os.getenv("OLLAMA_BRAIN_MODEL", "qwen2.5:7b")
-    ollama_timeout_s: float = float(os.getenv("OLLAMA_TIMEOUT_S", "30"))
+    ollama_model: str = os.getenv("OLLAMA_BRAIN_MODEL", "gemma3")
+    ollama_timeout_s: float = float(os.getenv("OLLAMA_TIMEOUT_S", "100"))
     llm_temperature: float = 0.1
     llm_num_predict: int = 256
-    llm_keep_alive: str = "30m"
+    llm_keep_alive: str = os.getenv("OLLAMA_KEEP_ALIVE", "60m")
 
 
 class BrainEngine:
