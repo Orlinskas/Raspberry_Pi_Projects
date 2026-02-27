@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 ACTIONS = [
-    "FORWARD",
-    "BACKWARD",
+    "STEP_FORWARD",
+    "STEP_BACKWARD",
     "TURN_LEFT_15",
     "TURN_LEFT_45",
     "TURN_RIGHT_15",
@@ -33,16 +33,16 @@ ACTIONS = [
 
 # Параметры движений (все заранее заданы; command.json не содержит params)
 ACTION_DURATION_MS = {
-    "FORWARD": 1000,
-    "BACKWARD": 500,
+    "STEP_FORWARD": 1000,
+    "STEP_BACKWARD": 500,
     "TURN_LEFT_15": 200,
     "TURN_LEFT_45": 400,
     "TURN_RIGHT_15": 200,
     "TURN_RIGHT_45": 400,
 }
 ACTION_SPEED = {
-    "FORWARD": 20,
-    "BACKWARD": 40,
+    "STEP_FORWARD": 20,
+    "STEP_BACKWARD": 40,
     "TURN_LEFT_15": 50,
     "TURN_LEFT_45": 50,
     "TURN_RIGHT_15": 50,

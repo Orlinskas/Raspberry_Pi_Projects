@@ -73,7 +73,7 @@ flowchart LR
 - `command_id`
 - `timestamp`
 - `based_on_state_id`
-- `action` (`FORWARD`, `BACKWARD`, `TURN_LEFT_15`, `TURN_LEFT_45`, `TURN_RIGHT_15`, `TURN_RIGHT_45`, `STOP`, `LIGHT_ON`, `LIGHT_OFF`)
+- `action` (`STEP_FORWARD`, `STEP_BACKWARD`, `TURN_LEFT_15`, `TURN_LEFT_45`, `TURN_RIGHT_15`, `TURN_RIGHT_45`, `STOP`, `LIGHT_ON`, `LIGHT_OFF`)
 - `reason`
 
 ## Поведение системы
@@ -194,7 +194,7 @@ ollama run qwen2.5:7b "Return JSON only: {\"action\":\"STOP\",\"reason\":\"healt
 
 `brain.py` отправляет в Ollama состояние робота и ожидает строго JSON-решение:
 
-- `action`: `FORWARD | BACKWARD | TURN_LEFT_15 | TURN_LEFT_45 | TURN_RIGHT_15 | TURN_RIGHT_45 | STOP | LIGHT_ON | LIGHT_OFF`
+- `action`: `STEP_FORWARD | STEP_BACKWARD | TURN_LEFT_15 | TURN_LEFT_45 | TURN_RIGHT_15 | TURN_RIGHT_45 | STOP | LIGHT_ON | LIGHT_OFF`
 - `reason`: краткая причина
 
 Параметры движений (speed, duration_ms) заданы в `shared.ACTION_SPEED` и `shared.ACTION_DURATION_MS`.

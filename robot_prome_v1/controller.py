@@ -188,9 +188,9 @@ def execute_command(command: RobotCommand) -> None:
     speed = ACTION_SPEED.get(action, 30)
     duration_ms = ACTION_DURATION_MS.get(action, 0)
 
-    if action == "FORWARD":
+    if action == "STEP_FORWARD":
         forward(speed=speed)
-    elif action == "BACKWARD":
+    elif action == "STEP_BACKWARD":
         backward(speed=speed)
     elif action in ("TURN_LEFT_15", "TURN_LEFT_45"):
         turn_left(speed=speed)
