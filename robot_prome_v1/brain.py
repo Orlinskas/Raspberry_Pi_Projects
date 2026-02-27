@@ -87,9 +87,9 @@ You are a decision engine for a mobile robot. The robot is small and curious; it
 
 **Input:** State JSON with:
 - sensor.obstacle_cm — front distance in cm (null if unavailable)
-- camera.scene_map — 7x7 grid: '.' free, 'R' robot (center), 'O' obstacle, 'T' target
-- camera.description — text description of the scene
-- camera.target_x — horizontal offset of target (-1..1, null if none)
+- camera.grid — 5x5 array of strings: '.' free, 'R' robot (center row 2 col 2), 'O' obstacle, 'T' target. Row 0=top, row 4=bottom, col 0=left, col 4=right.
+- camera.description — short scene summary (or null)
+- camera.target_x — horizontal offset of target -1..1 (null if none)
 
 ## Task
 
@@ -116,18 +116,20 @@ Do not add markdown, comments, or extra keys.
 
 1. **Safety first (strict priority):**
    - If sensor.obstacle_cm is not null and <= 50: avoid obstacle (TURN_LEFT_15, TURN_LEFT_45, TURN_RIGHT_15, TURN_RIGHT_45, or STEP_BACKWARD)
-   - If scene_map shows a very close obstacle in front: avoid
+   - If grid shows obstacle 'O' in front sector (rows 0–1, cols 1–3): avoid
 
 2. **Target seeking (when safe):**
    - If camera.description mentions toy-like object (toy, ball, teddy): prefer moving toward it
-   - If camera.target_x < -0.2 → TURN_LEFT_15 or TURN_LEFT_45 (use 45 for large offset)
-   - If -0.2 <= camera.target_x <= 0.2 → STEP_FORWARD
-   - If camera.target_x > 0.2 → TURN_RIGHT_15 or TURN_RIGHT_45 (use 45 for large offset)
-   - If camera.target_x is null → slow search turn (TURN_LEFT_15 or TURN_RIGHT_15)
+   - Infer target position from grid: 'T' in left (cols 0–1) → turn left; right (cols 3–4) → turn right; center (col 2) → STEP_FORWARD
+   - Use camera.target_x if present; else infer from grid (where is 'T' relative to center)
+   - Target left of center → TURN_LEFT_15 or TURN_LEFT_45 (use 45 for large offset)
+   - Target at center → STEP_FORWARD
+   - Target right of center → TURN_RIGHT_15 or TURN_RIGHT_45 (use 45 for large offset)
+   - No target visible → slow search turn (TURN_LEFT_15 or TURN_RIGHT_15)
 
 3. **Light:** Enable light in dark rooms. Blink at nearby toys (LIGHT_ON, LIGHT_OFF) but do not get stuck in light-only loops.
 
-4. **Avoid excessive turns:** If state is safe and target_x is near center, prefer STEP_FORWARD."""
+4. **Avoid excessive turns:** If state is safe and target is near center (grid col 2 or target_x in [-0.2,0.2]), prefer STEP_FORWARD."""
 
     def _request_ollama(self, state: RobotState) -> Optional[Dict[str, Any]]:
         """Делает запрос к Ollama и возвращает JSON-ответ модели."""

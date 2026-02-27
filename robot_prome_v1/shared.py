@@ -59,6 +59,14 @@ TURN_DURATION_MS = {k: v for k, v in ACTION_DURATION_MS.items() if k.startswith(
 TURN_SPEED = {k: v for k, v in ACTION_SPEED.items() if k.startswith("TURN_")}
 TURN_ACTIONS = frozenset(TURN_DURATION_MS.keys())
 
+DEFAULT_GRID_5X5 = [
+    ".....",
+    ".....",
+    "..R..",
+    ".....",
+    ".....",
+]
+
 PathLike = Union[str, Path]
 GPIO_LOCK = threading.RLock()
 
@@ -72,25 +80,7 @@ def zero_state_payload() -> Dict[str, Any]:
             "obstacle_cm": None,
         },
         "camera": {
-            "scene_map": {
-                "grid_size": 7,
-                "robot_cell": {"row": 3, "col": 3},
-                "grid": [
-                    ".......",
-                    ".......",
-                    ".......",
-                    "...R...",
-                    ".......",
-                    ".......",
-                    ".......",
-                ],
-                "legend": {
-                    ".": "free",
-                    "R": "robot",
-                    "O": "obstacle",
-                    "T": "target",
-                },
-            },
+            "grid": DEFAULT_GRID_5X5,
             "description": None,
             "target_x": None,
         },
@@ -172,24 +162,24 @@ class ProximityState:
 
 @dataclass
 class CameraState:
-    """Состояние камеры/детектора."""
+    """Состояние камеры/детектора. grid — 5x5 массив строк: '.' free, 'R' robot, 'O' obstacle, 'T' target."""
 
-    scene_map: Optional[Dict[str, Any]] = None
+    grid: Optional[list] = field(default_factory=lambda: list(DEFAULT_GRID_5X5))
     description: Optional[str] = None
     target_x: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "scene_map": self.scene_map,
+            "grid": self.grid,
             "description": self.description,
             "target_x": self.target_x,
         }
 
     @classmethod
     def from_dict(cls, payload: Dict[str, Any]) -> "CameraState":
-        scene_map = payload.get("scene_map")
-        if not isinstance(scene_map, dict):
-            scene_map = None
+        grid = payload.get("grid")
+        if not isinstance(grid, list) or len(grid) != 5 or not all(isinstance(r, str) and len(r) == 5 for r in grid):
+            grid = DEFAULT_GRID_5X5
         target_x = payload.get("target_x")
         try:
             target_x = float(target_x) if target_x is not None else None
@@ -201,7 +191,7 @@ class CameraState:
         if description is not None:
             description = str(description).strip() or None
         return cls(
-            scene_map=scene_map,
+            grid=grid,
             description=description,
             target_x=target_x,
         )

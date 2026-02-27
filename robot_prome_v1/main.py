@@ -13,7 +13,7 @@ from pathlib import Path
 from brain import BrainConfig, run_brain_loop
 from controller import run_controller_loop
 from shared import atomic_write_json, read_json, zero_command_payload, zero_state_payload
-from vision import VisionConfig, run_vision_loop
+from vision import STREAM_DEFAULT_PORT, VisionConfig, run_vision_loop
 
 LOGGER = logging.getLogger("main")
 
@@ -47,6 +47,8 @@ def parse_args():
         default="run",
         help="run: обычный режим, dry: без управления моторами",
     )
+    parser.add_argument("--stream-port", type=int, default=STREAM_DEFAULT_PORT, help="Порт видеопотока камеры (браузер)")
+    parser.add_argument("--no-stream", action="store_true", help="Отключить видеопоток камеры в браузере")
     return parser.parse_args()
 
 
@@ -61,7 +63,10 @@ def main() -> None:
     command_path = protocol_dir / "command.json"
 
     stop_event = threading.Event()
-    vision_config = VisionConfig()
+    vision_config = VisionConfig(
+        stream_port=args.stream_port,
+        stream_enabled=not args.no_stream,
+    )
     brain_config = BrainConfig(state_path=state_path, command_path=command_path)
 
     threads = [

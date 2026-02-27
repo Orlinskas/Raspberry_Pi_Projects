@@ -1,29 +1,17 @@
 {
-  "state_id": "st_000001",
-  "timestamp": 0.0,
+  "state_id": "st_022230",
+  "timestamp": 1772213022.089639,
   "sensor": {
     "obstacle_cm": null
   },
   "camera": {
-    "scene_map": {
-      "grid_size": 7,
-      "robot_cell": {"row": 3, "col": 3},
-      "grid": [
-        ".......",
-        ".......",
-        ".......",
-        "...R...",
-        ".......",
-        ".......",
-        "......."
-      ],
-      "legend": {
-        ".": "free",
-        "R": "robot",
-        "O": "obstacle",
-        "T": "target"
-      }
-    },
+    "grid": [
+      ".....",
+      ".....",
+      "..R..",
+      ".....",
+      "....."
+    ],
     "description": null,
     "target_x": null
   }

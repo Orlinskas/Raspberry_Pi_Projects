@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import socket
 import statistics
 import threading
 import time
@@ -17,10 +18,21 @@ import urllib.error
 import urllib.request
 from collections import deque
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 from pathlib import Path
 from typing import Any, Deque, Dict, Optional, Protocol, Tuple
 
-from shared import GPIO_LOCK, CameraState, ProximityState, RobotState, atomic_write_json, now_ts, read_json
+from shared import (
+    DEFAULT_GRID_5X5,
+    GPIO_LOCK,
+    CameraState,
+    ProximityState,
+    RobotState,
+    atomic_write_json,
+    now_ts,
+    read_json,
+)
 
 LOGGER = logging.getLogger("vision")
 STATE_PATH = Path(__file__).with_name("protocol") / "state.json"
@@ -62,12 +74,31 @@ try:
 except ImportError:  # pragma: no cover
     cv2 = None
 
+# Порт для MJPEG-потока камеры в браузере
+STREAM_DEFAULT_PORT = 8765
+
+
+class FrameBuffer:
+    """Потокобезопасный буфер последнего кадра с камеры для веб-стрима."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._frame: Optional[bytes] = None  # JPEG-байты
+
+    def put(self, jpeg_bytes: bytes) -> None:
+        with self._lock:
+            self._frame = bytes(jpeg_bytes)
+
+    def get(self) -> Optional[bytes]:
+        with self._lock:
+            return self._frame if self._frame is not None else None
+
 
 @dataclass
 class CameraObservation:
     """Нормализованный результат camera + vision модели."""
 
-    scene_map: Dict[str, Any]
+    grid: list
     description: Optional[str]
     target_x: Optional[float]
 
@@ -203,8 +234,10 @@ class OpenCVCameraDetector:
         ollama_temperature: float = OLLAMA_TEMPERATURE,
         ollama_num_predict: int = OLLAMA_NUM_PREDICT,
         ollama_keep_alive: str = OLLAMA_KEEP_ALIVE,
+        frame_buffer: Optional[FrameBuffer] = None,
     ) -> None:
         self._capture_dir = capture_dir
+        self._frame_buffer = frame_buffer
         self._camera_index = camera_index
         self._width = width
         self._height = height
@@ -252,14 +285,13 @@ class OpenCVCameraDetector:
     def _vision_system_prompt() -> str:
         return (
             "You are a camera perception engine for a SMALL mobile robot on the FLOOR. "
-            "Return ONLY one JSON object with keys: scene_map, description, target_x. "
-            "scene_map must use EXACT 7x7 grid schema with keys: grid_size, robot_cell, grid, legend. "
-            "grid_size must be 7. robot_cell must be {'row':3,'col':3}. "
-            "grid must be array of 7 strings, each length 7, symbols only: '.', 'R', 'O', 'T'. "
-            "R = robot center at row 3 col 3, O = obstacle, T = target. "
-            "legend must be object mapping symbols to meanings. "
-            "description is short object scene summary (5-15 words) or null. "
-            "target_x is number in range -1.0..1.0 where -1 is left, 0 center, 1 right; or null if unknown. "
+            "Return ONLY one JSON object with keys: grid, description, target_x. "
+            "grid must be array of 5 strings, each length 5. Symbols: '.' free, 'R' robot, 'O' obstacle, 'T' target. "
+            "Robot is always at center: row 2, col 2 (index 0-based). "
+            "ALWAYS mark as obstacle 'O': walls, chairs, tables, furniture, legs, door frames, corners, any solid object the robot might hit. "
+            "Be conservative: if unsure whether something blocks the path, mark it as 'O'. "
+            "description: short scene summary (5-15 words) or null. "
+            "target_x: number -1.0..1.0 (-1 left, 0 center, 1 right) or null. "
             "No markdown, no extra keys."
         )
 
@@ -268,8 +300,11 @@ class OpenCVCameraDetector:
         payload = {
             "state_id": state_id,
             "task": (
-                "Build a strict 7x7 top-down map with robot in center, visible obstacles, and target if present. "
-                "Also return short scene description and horizontal target_x."
+                "Build a 5x5 top-down grid. Robot at center (row 2 col 2). "
+                "Use O for ALL obstacles: chairs, walls, furniture, table legs, doors, anything solid. "
+                "Use . for free floor. Use T for target (toy, ball). "
+                "Mark chairs and walls as O whenever visible — the robot must avoid them. "
+                "Return grid (5 strings of 5 chars), description, target_x."
             ),
         }
         return json.dumps(payload, ensure_ascii=True, sort_keys=True)
@@ -364,114 +399,81 @@ class OpenCVCameraDetector:
         return raw
 
     @staticmethod
-    def _build_grid_7x7(
+    def _build_grid_5x5(
         obstacles: list[Dict[str, Any]],
         target: Optional[Dict[str, Any]],
     ) -> list[str]:
-        grid = [["." for _ in range(7)] for _ in range(7)]
-        robot_row, robot_col = 3, 3
+        grid = [["." for _ in range(5)] for _ in range(5)]
+        robot_row, robot_col = 2, 2
         grid[robot_row][robot_col] = "R"
 
         for obstacle in obstacles:
             try:
-                col = int(round(float(obstacle["x"]) * 6.0))
-                row = int(round(float(obstacle["y"]) * 6.0))
+                col = int(round(float(obstacle["x"]) * 4.0))
+                row = int(round(float(obstacle["y"]) * 4.0))
             except (KeyError, TypeError, ValueError):
                 continue
-            row = max(0, min(6, row))
-            col = max(0, min(6, col))
+            row = max(0, min(4, row))
+            col = max(0, min(4, col))
             if row == robot_row and col == robot_col:
                 continue
             grid[row][col] = "O"
 
         if isinstance(target, dict):
             try:
-                t_col = int(round(float(target["x"]) * 6.0))
-                t_row = int(round(float(target["y"]) * 6.0))
+                t_col = int(round(float(target["x"]) * 4.0))
+                t_row = int(round(float(target["y"]) * 4.0))
             except (KeyError, TypeError, ValueError):
                 t_row, t_col = -1, -1
             if t_row >= 0 and t_col >= 0:
-                t_row = max(0, min(6, t_row))
-                t_col = max(0, min(6, t_col))
+                t_row = max(0, min(4, t_row))
+                t_col = max(0, min(4, t_col))
                 if not (t_row == robot_row and t_col == robot_col):
                     grid[t_row][t_col] = "T"
 
         return ["".join(row_cells) for row_cells in grid]
 
     @staticmethod
-    def _empty_scene_map_7x7() -> Dict[str, Any]:
-        grid = [["." for _ in range(7)] for _ in range(7)]
-        grid[3][3] = "R"
-        return {
-            "grid_size": 7,
-            "robot_cell": {"row": 3, "col": 3},
-            "grid": ["".join(row_cells) for row_cells in grid],
-            "legend": {
-                ".": "free",
-                "R": "robot",
-                "O": "obstacle",
-                "T": "target",
-            },
-        }
+    def _empty_grid_5x5() -> list:
+        return list(DEFAULT_GRID_5X5)
 
     @staticmethod
-    def _normalize_scene_map(payload: Dict[str, Any], target_x: Optional[float]) -> Dict[str, Any]:
+    def _extract_or_build_grid(payload: Dict[str, Any], target_x: Optional[float]) -> list:
+        """Extract grid from payload or build from obstacles/target."""
+        grid_raw = payload.get("grid")
+        if isinstance(grid_raw, list) and len(grid_raw) == 5:
+            valid = all(isinstance(row, str) and len(row) == 5 for row in grid_raw)
+            if valid:
+                return list(grid_raw)
+
         scene_map = payload.get("scene_map")
-        if not isinstance(scene_map, dict):
-            scene_map = {}
-
-        obstacles_raw = scene_map.get("obstacles")
         obstacles: list[Dict[str, Any]] = []
-        if isinstance(obstacles_raw, list):
-            for item in obstacles_raw:
-                if not isinstance(item, dict):
-                    continue
-                x = item.get("x")
-                y = item.get("y")
-                try:
-                    x = float(x)
-                    y = float(y)
-                except (TypeError, ValueError):
-                    continue
-                obstacle: Dict[str, Any] = {"x": max(0.0, min(1.0, x)), "y": max(0.0, min(1.0, y))}
-                label = item.get("label")
-                if label is not None:
-                    obstacle["label"] = str(label).strip() or "obstacle"
-                obstacles.append(obstacle)
-
-        target_raw = scene_map.get("target")
         target: Optional[Dict[str, Any]] = None
-        if isinstance(target_raw, dict):
-            tx = target_raw.get("x")
-            ty = target_raw.get("y")
-            try:
-                tx = float(tx)
-                ty = float(ty)
-                target = {"x": max(0.0, min(1.0, tx)), "y": max(0.0, min(1.0, ty))}
-                label = target_raw.get("label")
-                if label is not None:
-                    target["label"] = str(label).strip() or "target"
-            except (TypeError, ValueError):
-                target = None
-        elif target_x is not None:
-            target = {
-                "x": max(0.0, min(1.0, (target_x + 1.0) / 2.0)),
-                "y": 0.35,
-                "label": "target",
-            }
+        if isinstance(scene_map, dict):
+            obstacles_raw = scene_map.get("obstacles")
+            if isinstance(obstacles_raw, list):
+                for item in obstacles_raw:
+                    if not isinstance(item, dict):
+                        continue
+                    x = item.get("x")
+                    y = item.get("y")
+                    try:
+                        x, y = float(x), float(y)
+                        obstacles.append({"x": max(0.0, min(1.0, x)), "y": max(0.0, min(1.0, y))})
+                    except (TypeError, ValueError):
+                        continue
+            target_raw = scene_map.get("target")
+            if isinstance(target_raw, dict):
+                try:
+                    tx = float(target_raw.get("x", 0))
+                    ty = float(target_raw.get("y", 0))
+                    target = {"x": max(0.0, min(1.0, tx)), "y": max(0.0, min(1.0, ty))}
+                except (TypeError, ValueError):
+                    target = None
+            elif target_x is not None:
+                target = {"x": (target_x + 1.0) / 2.0, "y": 0.35}
 
-        normalized_grid = OpenCVCameraDetector._build_grid_7x7(obstacles=obstacles, target=target)
-        return {
-            "grid_size": 7,
-            "robot_cell": {"row": 3, "col": 3},
-            "grid": normalized_grid,
-            "legend": {
-                ".": "free",
-                "R": "robot",
-                "O": "obstacle",
-                "T": "target",
-            },
-        }
+        return OpenCVCameraDetector._build_grid_5x5(obstacles=obstacles, target=target)
 
     @staticmethod
     def _normalize_vision_payload(payload: Dict[str, Any]) -> CameraObservation:
@@ -486,10 +488,10 @@ class OpenCVCameraDetector:
             target_x = None
         if target_x is not None:
             target_x = max(-1.0, min(1.0, target_x))
-        scene_map = OpenCVCameraDetector._normalize_scene_map(payload, target_x=target_x)
+        grid = OpenCVCameraDetector._extract_or_build_grid(payload, target_x=target_x)
 
         return CameraObservation(
-            scene_map=scene_map,
+            grid=grid,
             description=description,
             target_x=target_x,
         )
@@ -511,6 +513,12 @@ class OpenCVCameraDetector:
             LOGGER.warning("Не удалось сохранить кадр: %s", image_path)
             return None
 
+        # Обновляем буфер для веб-стрима (не блокирует работу робота)
+        if self._frame_buffer is not None and cv2 is not None:
+            _, jpeg = cv2.imencode(".jpg", frame)
+            if jpeg is not None:
+                self._frame_buffer.put(jpeg.tobytes())
+
         _prune_capture_images(self._capture_dir, keep_last=self._keep_last)
         self._last_image_path = str(image_path.resolve())
         model_payload = self._request_ollama(
@@ -519,7 +527,7 @@ class OpenCVCameraDetector:
         )
         if model_payload is None:
             return CameraObservation(
-                scene_map=OpenCVCameraDetector._empty_scene_map_7x7(),
+                grid=OpenCVCameraDetector._empty_grid_5x5(),
                 description=None,
                 target_x=None,
             )
@@ -534,12 +542,113 @@ class OpenCVCameraDetector:
             self._cap = None
 
 
+def _get_local_ip() -> str:
+    """Возвращает локальный IP для отображения в инструкциях."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0)
+        s.connect(("10.255.255.255", 1))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+def _make_stream_handler(frame_buffer: FrameBuffer) -> type:
+    """Создаёт класс HTTP-обработчика с замыканием на frame_buffer."""
+
+    class MJPEGStreamHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, format: str, *args: Any) -> None:
+            LOGGER.debug("Stream %s", args[0] if args else "")
+
+        def do_GET(self) -> None:
+            if self.path == "/" or self.path == "":
+                self._serve_index()
+            elif self.path == "/stream":
+                self._serve_mjpeg()
+            else:
+                self.send_error(404)
+
+        def _serve_index(self) -> None:
+            html = (
+                b"<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                b"<title>Robot Camera</title></head><body style='margin:0;background:#111'>"
+                b"<img src='/stream' style='display:block;max-width:100%;height:auto'>"
+                b"</body></html>"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(html)))
+            self.end_headers()
+            self.wfile.write(html)
+
+        def _serve_mjpeg(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            while True:
+                frame = frame_buffer.get()
+                if frame:
+                    try:
+                        part = (
+                            b"--frame\r\n"
+                            b"Content-Type: image/jpeg\r\n"
+                            b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n"
+                        )
+                        self.wfile.write(part)
+                        self.wfile.write(frame)
+                        self.wfile.write(b"\r\n")
+                    except (BrokenPipeError, ConnectionResetError):
+                        break
+                time.sleep(0.1)
+
+    return MJPEGStreamHandler
+
+
+class _ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+
+
+def run_stream_server(
+    port: int,
+    frame_buffer: FrameBuffer,
+    stop_event: threading.Event,
+) -> None:
+    """Запускает HTTP-сервер MJPEG-потока в фоновом потоке (daemon)."""
+    handler = _make_stream_handler(frame_buffer)
+    server = _ThreadedHTTPServer(("0.0.0.0", port), handler)
+
+    def serve() -> None:
+        def shutdown_on_stop() -> None:
+            stop_event.wait()
+            server.shutdown()
+
+        t = threading.Thread(target=shutdown_on_stop, daemon=True)
+        t.start()
+        server.serve_forever()
+
+    thread = threading.Thread(target=serve, name="camera-stream", daemon=True)
+    thread.start()
+    LOGGER.info(
+        "Video stream: http://%s:%d  (or http://127.0.0.1:%d)",
+        _get_local_ip(),
+        port,
+        port,
+    )
+
+
 @dataclass
 class VisionConfig:
     """Конфигурация синхронного vision-цикла."""
 
     capture_dir: Path = CAPTURE_DIR
     capture_keep_last: int = CAPTURE_KEEP_LAST
+    stream_port: int = STREAM_DEFAULT_PORT
+    stream_enabled: bool = True
     ollama_base_url: str = OLLAMA_BASE_URL
     ollama_model: str = OLLAMA_MODEL
     ollama_timeout_s: float = OLLAMA_TIMEOUT_S
@@ -548,7 +657,10 @@ class VisionConfig:
     ollama_keep_alive: str = OLLAMA_KEEP_ALIVE
 
 
-def build_sensors(config: VisionConfig) -> Tuple[ProximitySensor, CameraDetector]:
+def build_sensors(
+    config: VisionConfig,
+    frame_buffer: Optional[FrameBuffer] = None,
+) -> Tuple[ProximitySensor, CameraDetector]:
     if cv2 is None:
         LOGGER.error("cv2 не найден, используется MockCameraDetector")
         camera: CameraDetector = MockCameraDetector()
@@ -562,6 +674,7 @@ def build_sensors(config: VisionConfig) -> Tuple[ProximitySensor, CameraDetector
             ollama_temperature=config.ollama_temperature,
             ollama_num_predict=config.ollama_num_predict,
             ollama_keep_alive=config.ollama_keep_alive,
+            frame_buffer=frame_buffer,
         )
     return UltrasonicProximitySensor(), camera
 
@@ -616,7 +729,7 @@ def _build_state(state_counter: int, proximity: ProximitySensor, camera: CameraD
         observation = camera.read_observation(state_id)
         if observation is not None:
             camera_state = CameraState(
-                scene_map=observation.scene_map,
+                grid=observation.grid,
                 description=observation.description,
                 target_x=observation.target_x,
             )
@@ -636,11 +749,30 @@ def _build_state(state_counter: int, proximity: ProximitySensor, camera: CameraD
     )
 
 
+def print_stream_instructions(port: int = STREAM_DEFAULT_PORT) -> None:
+    """Выводит в консоль инструкцию для подключения к видеопотоку."""
+    ip = _get_local_ip()
+    print()
+    print("  " + "=" * 56)
+    print("  ВИДЕО ПОТОК КАМЕРЫ — откройте в браузере:")
+    print("  http://{}:{}".format(ip, port))
+    print("  (локально: http://127.0.0.1:{})".format(port))
+    print("  " + "=" * 56)
+    print()
+
+
 def run_vision_loop(config: VisionConfig, stop_event: Optional[threading.Event] = None) -> None:
     """Основной цикл vision: синхронный capture -> LLM -> ultrasonic -> state write."""
     stop_event = stop_event or threading.Event()
     _clear_capture_images(config.capture_dir)
-    proximity, camera = build_sensors(config)
+
+    frame_buffer: Optional[FrameBuffer] = None
+    if config.stream_enabled and cv2 is not None:
+        frame_buffer = FrameBuffer()
+        run_stream_server(config.stream_port, frame_buffer, stop_event)
+        print_stream_instructions(config.stream_port)
+
+    proximity, camera = build_sensors(config, frame_buffer=frame_buffer)
     counter = 0
     LOGGER.info("Vision запущен. state_path=%s mode=sync", STATE_PATH)
 
@@ -662,6 +794,8 @@ def parse_args() -> VisionConfig:
     parser.add_argument("--ollama-timeout-s", type=float, default=VisionConfig.ollama_timeout_s, help="Timeout запроса vision модели")
     parser.add_argument("--ollama-temperature", type=float, default=VisionConfig.ollama_temperature, help="Sampling temperature для vision модели")
     parser.add_argument("--ollama-num-predict", type=int, default=VisionConfig.ollama_num_predict, help="Макс. токенов в ответе vision модели")
+    parser.add_argument("--stream-port", type=int, default=STREAM_DEFAULT_PORT, help="Порт для видеопотока в браузере")
+    parser.add_argument("--no-stream", action="store_true", help="Отключить видеопоток в браузере")
     args = parser.parse_args()
     return VisionConfig(
         capture_keep_last=max(1, int(args.capture_keep_last)),
@@ -670,6 +804,8 @@ def parse_args() -> VisionConfig:
         ollama_timeout_s=max(0.1, float(args.ollama_timeout_s)),
         ollama_temperature=max(0.0, float(args.ollama_temperature)),
         ollama_num_predict=max(1, int(args.ollama_num_predict)),
+        stream_port=max(1024, int(args.stream_port)),
+        stream_enabled=not args.no_stream,
     )
 
 
