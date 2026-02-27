@@ -31,6 +31,12 @@ TRIG_PIN = 1
 ULTRASONIC_TIMEOUT_S = 0.03
 ULTRASONIC_MIN_CM = 2.0
 ULTRASONIC_MAX_CM = 500.0
+# HC-SR04: минимум 60 мс между измерениями (документация) — иначе эхо от прошлого цикла
+ULTRASONIC_INTER_MEASURE_DELAY_S = 0.06
+# Количество замеров за один вызов read_distance_cm; медиана отсекает выбросы
+ULTRASONIC_SAMPLES_PER_READ = 5
+# Отклонение от медианы > этой доли — считаем выбросом (0.4 = 40%)
+ULTRASONIC_OUTLIER_RATIO = 0.4
 
 CAMERA_INDEX = 0
 CAMERA_WIDTH = 640
@@ -87,11 +93,12 @@ class CameraDetector(Protocol):
 
 
 class UltrasonicProximitySensor:
-    """Простой датчик HC-SR04: чтение + сглаживание по 3 последним замерам."""
+    """Датчик HC-SR04: несколько замеров, отсечение выбросов, медиана, задержка 60 мс."""
 
     def __init__(self) -> None:
         self._initialized = False
-        self._history: Deque[float] = deque(maxlen=3)
+        self._history: Deque[float] = deque(maxlen=5)
+        self._last_read_time: float = 0.0
 
     def _init_gpio_once(self) -> None:
         if self._initialized:
@@ -110,13 +117,12 @@ class UltrasonicProximitySensor:
     def _read_once_cm(self) -> Optional[float]:
         deadline = time.monotonic() + ULTRASONIC_TIMEOUT_S
         with GPIO_LOCK:
-            # Переустанавливаем направления при каждом чтении:
-            # controller может делать GPIO.cleanup() при завершении.
             GPIO.setup(ECHO_PIN, GPIO.IN)
             GPIO.setup(TRIG_PIN, GPIO.OUT)
-
+            GPIO.output(TRIG_PIN, GPIO.LOW)
+            time.sleep(0.000002)
             GPIO.output(TRIG_PIN, GPIO.HIGH)
-            time.sleep(0.000015)
+            time.sleep(0.00001)
             GPIO.output(TRIG_PIN, GPIO.LOW)
 
             while GPIO.input(ECHO_PIN) == 0:
@@ -134,15 +140,36 @@ class UltrasonicProximitySensor:
             return float(distance_cm)
         return None
 
+    def _filter_outliers(self, samples: list[float]) -> list[float]:
+        """Отбрасывает замеры, сильно отличающиеся от медианы."""
+        if len(samples) < 2:
+            return samples
+        med = statistics.median(samples)
+        # Для близких расстояний — абсолютный порог 5 см, для дальних — относительный
+        threshold = max(5.0, med * ULTRASONIC_OUTLIER_RATIO)
+        return [s for s in samples if abs(s - med) <= threshold]
+
     def read_distance_cm(self) -> float:
         self._init_gpio_once()
-        distance = self._read_once_cm()
-        if distance is None:
+        now = time.monotonic()
+        elapsed = now - self._last_read_time
+        if elapsed < ULTRASONIC_INTER_MEASURE_DELAY_S and self._history:
+            return float(self._history[-1])
+        samples: list[float] = []
+        for _ in range(ULTRASONIC_SAMPLES_PER_READ):
+            d = self._read_once_cm()
+            if d is not None:
+                samples.append(d)
+            time.sleep(ULTRASONIC_INTER_MEASURE_DELAY_S)
+        self._last_read_time = time.monotonic()
+        valid = self._filter_outliers(samples)
+        if not valid:
             if not self._history:
                 raise RuntimeError("No valid ultrasonic echo")
-            return float(statistics.mean(self._history))
-        self._history.append(distance)
-        return float(statistics.mean(self._history))
+            return float(statistics.median(self._history))
+        result = statistics.median(valid)
+        self._history.append(result)
+        return result
 
 
 class MockCameraDetector:
@@ -224,7 +251,7 @@ class OpenCVCameraDetector:
     @staticmethod
     def _vision_system_prompt() -> str:
         return (
-            "You are a camera perception engine for a mobile robot. "
+            "You are a camera perception engine for a SMALL mobile robot on the FLOOR. "
             "Return ONLY one JSON object with keys: scene_map, description, target_x. "
             "scene_map must use EXACT 7x7 grid schema with keys: grid_size, robot_cell, grid, legend. "
             "grid_size must be 7. robot_cell must be {'row':3,'col':3}. "
@@ -622,7 +649,6 @@ def run_vision_loop(config: VisionConfig, stop_event: Optional[threading.Event] 
             counter += 1
             state = _build_state(counter, proximity, camera)
             atomic_write_json(STATE_PATH, state.to_dict())
-            LOGGER.info("STATE written: state_id=%s camera=%s sensor=%s", state.state_id, state.camera.to_dict(), state.sensor.to_dict())
     finally:
         camera.close()
         LOGGER.info("Vision остановлен")
