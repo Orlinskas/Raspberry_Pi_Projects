@@ -91,9 +91,9 @@ flowchart LR
 - `command_id`
 - `timestamp`
 - `based_on_state_id`
-- `action` (`FORWARD`, `BACKWARD`, `TURN_LEFT`, `TURN_RIGHT`, `STOP`)
-- `params.speed`
-- `params.duration_ms`
+- `action` (`FORWARD`, `BACKWARD`, `TURN_LEFT_15`, `TURN_LEFT_45`, `TURN_RIGHT_15`, `TURN_RIGHT_45`, `STOP`, `LIGHT_ON`, `LIGHT_OFF`)
+- `params.speed` (используется только для FORWARD/BACKWARD)
+- `params.duration_ms` (используется только для FORWARD/BACKWARD; для поворотов — фиксированные значения в `shared.TURN_DURATION_MS`)
 - `reason`
 
 ## Поведение системы
@@ -221,7 +221,7 @@ ollama run qwen2.5:7b "Return JSON only: {\"action\":\"STOP\",\"speed\":0,\"dura
 
 `brain.py` отправляет в Ollama состояние робота и ожидает строго JSON-решение:
 
-- `action`: `FORWARD | BACKWARD | TURN_LEFT | TURN_RIGHT | STOP`
+- `action`: `FORWARD | BACKWARD | TURN_LEFT_15 | TURN_LEFT_45 | TURN_RIGHT_15 | TURN_RIGHT_45 | STOP | LIGHT_ON | LIGHT_OFF`
 - `speed`: `0..100`
 - `duration_ms`: `>= 0`
 - `reason`: краткая причина

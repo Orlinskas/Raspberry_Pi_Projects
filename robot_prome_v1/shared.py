@@ -19,7 +19,41 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-ACTIONS = ["FORWARD", "BACKWARD", "TURN_LEFT", "TURN_RIGHT", "STOP", "LIGHT_ON", "LIGHT_OFF"]
+ACTIONS = [
+    "FORWARD",
+    "BACKWARD",
+    "TURN_LEFT_15",
+    "TURN_LEFT_45",
+    "TURN_RIGHT_15",
+    "TURN_RIGHT_45",
+    "STOP",
+    "LIGHT_ON",
+    "LIGHT_OFF",
+]
+
+# Параметры поворотов (подбираются отдельно; command.params для поворотов игнорируются)
+TURN_DURATION_MS = {
+    "TURN_LEFT_15": 200,
+    "TURN_LEFT_45": 500,
+    "TURN_RIGHT_15": 200,
+    "TURN_RIGHT_45": 500,
+}
+TURN_SPEED = {
+    "TURN_LEFT_15": 40,
+    "TURN_LEFT_45": 40,
+    "TURN_RIGHT_15": 40,
+    "TURN_RIGHT_45": 40,
+}
+
+
+def get_effective_duration_ms(action: str, params_duration_ms: int) -> int:
+    """Возвращает duration_ms для действия: для поворотов — из TURN_DURATION_MS, иначе из params."""
+    if action in TURN_DURATION_MS:
+        return TURN_DURATION_MS[action]
+    return params_duration_ms
+
+
+TURN_ACTIONS = frozenset(TURN_DURATION_MS.keys())
 
 PathLike = Union[str, Path]
 GPIO_LOCK = threading.RLock()

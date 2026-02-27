@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Модуль brain: читает `state.json`, принимает решение и пишет `command.json`."""
+"""Модуль brain: читает `state.json`, принимает решение и пишет `command.json`.
+
+Команды поворота разделены по углу:
+- TURN_LEFT_15 / TURN_RIGHT_15 — малый поворот (~15°);
+- TURN_LEFT_45 / TURN_RIGHT_45 — большой поворот (~45°).
+
+Для поворотов command.params (speed, duration_ms) ИГНОРИРУЮТСЯ контроллером.
+Длительности заданы в shared.TURN_DURATION_MS и подбираются отдельно под конкретный робот.
+"""
 
 from __future__ import annotations
 
@@ -97,25 +105,25 @@ class BrainEngine:
             "camera.scene_map uses 7x7 grid with symbols '.', 'R', 'O', 'T' and robot center at row=3 col=3. "
             "Policy rules (strict priority): "
             "1) Safety first: use sensor.obstacle_cm as primary front safety distance. "
-            "If sensor.obstacle_cm is not null and <= 50 then avoid obstacle: choose TURN_LEFT or TURN_RIGHT (or BACKWARD if needed). "
+            "If sensor.obstacle_cm is not null and <= 50 then avoid obstacle: choose TURN_LEFT_15, TURN_LEFT_45, TURN_RIGHT_15 or TURN_RIGHT_45 (or BACKWARD if needed). "
             "If scene_map shows a very close obstacle in front sector, also avoid. "
             "2) If safe (sensor.obstacle_cm is null or > 50), target seeking mode: "
-            "if camera.description mentions toy-like object (toy, ball, teddy), prefer moving toward it. "
+            "if camera.description mentions toy-like object (toy, ball, teddy, etc), prefer moving toward it. "
             "When a toy-like object is detected and it is near to you, blink at it using LIGHT_ON and LIGHT_OFF, then continue movement decisions. "
             "Enable light if you see a dark room. "
             "Do not get stuck in long light-only loops. "
-            "If camera.target_x < -0.2 -> TURN_LEFT. "
+            "Turn commands by angle: "
+            "TURN_LEFT_15 / TURN_RIGHT_15 = small correction (~15°), TURN_LEFT_45 / TURN_RIGHT_45 = larger turn (~45°). "
+            "If camera.target_x < -0.2 -> TURN_LEFT_15 or TURN_LEFT_45 (use 45 for large offset). "
             "If -0.2 <= camera.target_x <= 0.2 -> FORWARD. "
-            "If camera.target_x > 0.2 -> TURN_RIGHT. "
-            "If camera.target_x is null -> slow search turn (TURN_LEFT or TURN_RIGHT). "
-            "3) Prevent turn loops: if last_command.last_action was TURN_LEFT or TURN_RIGHT and state is safe with target_x near center, choose FORWARD instead of another turn. "
-            "Motion constraints: TURN_LEFT and TURN_RIGHT rotate in place (no forward movement). "
-            "Keep turns short and moderate: turn speed <= 40 and duration_ms <= 200 unless emergency. "
-            "Do not use speed=100 in normal conditions. "
+            "If camera.target_x > 0.2 -> TURN_RIGHT_15 or TURN_RIGHT_45 (use 45 for large offset). "
+            "If camera.target_x is null -> slow search turn (TURN_LEFT_15 or TURN_RIGHT_15). "
+            "3) Prevent turn loops: if last_command.last_action was a TURN_* command and state is safe with target_x near center, choose FORWARD instead of another turn. "
+            "Motion constraints: TURN_*_15 and TURN_*_45 rotate in place (no forward movement). "
             "You receive robot state JSON and must output ONLY a JSON object with keys: "
             "action, speed, duration_ms, reason. "
             f"Allowed action values: {allowed_actions}. "
-            "speed must be integer 0..100. duration_ms must be integer >= 0. "
+            "speed must be integer 0..60 (used only for FORWARD/BACKWARD). duration_ms must be integer >= 0 (used only for FORWARD/BACKWARD). "
             "Do not add markdown, comments, or extra keys."
         )
 

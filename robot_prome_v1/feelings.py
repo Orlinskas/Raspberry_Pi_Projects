@@ -10,7 +10,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from shared import FeelingsState, RobotCommand, RobotState, atomic_write_json, now_ts, read_json
+from shared import FeelingsState, RobotCommand, RobotState, atomic_write_json, get_effective_duration_ms, now_ts, read_json
 
 LOGGER = logging.getLogger("feelings")
 STATE_PATH = Path(__file__).with_name("protocol") / "state.json"
@@ -19,7 +19,8 @@ POLL_INTERVAL_S = 0.1
 
 
 def _build_feelings(command: RobotCommand) -> FeelingsState:
-    ends_at = float(command.timestamp) + (max(0, int(command.params.duration_ms)) / 1000.0)
+    duration_ms = get_effective_duration_ms(command.action, max(0, int(command.params.duration_ms)))
+    ends_at = float(command.timestamp) + (duration_ms / 1000.0)
     remaining_ms = max(0, int((ends_at - now_ts()) * 1000.0))
     return FeelingsState(last_action=command.action, reason=command.reason, remaining_ms=remaining_ms)
 
