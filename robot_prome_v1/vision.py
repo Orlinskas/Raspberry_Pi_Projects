@@ -5,11 +5,8 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import json
 import logging
 import os
-import re
 import socket
 import statistics
 import threading
@@ -21,16 +18,14 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from pathlib import Path
-from typing import Any, Deque, Dict, Optional, Protocol, Tuple
+from typing import Any, Deque, Optional, Protocol, Tuple
 
 from shared import (
-    DEFAULT_DEPTH_MAP,
     GPIO_LOCK,
     CameraState,
     ProximityState,
     RobotState,
     atomic_write_json,
-    read_json,
 )
 
 LOGGER = logging.getLogger("vision")
@@ -52,13 +47,6 @@ CAMERA_HEIGHT = 480
 CAMERA_FPS = 30.0
 CAMERA_WARMUP_S = 1.0
 CAPTURE_KEEP_LAST = 30
-
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://192.168.0.18:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_VISION_MODEL", "gemma3")
-OLLAMA_TIMEOUT_S = float(os.getenv("OLLAMA_TIMEOUT_S", "100"))
-OLLAMA_TEMPERATURE = 0.0
-OLLAMA_NUM_PREDICT = 256
-OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "60m")
 
 try:
     import RPi.GPIO as GPIO
@@ -90,16 +78,6 @@ class FrameBuffer:
             return self._frame if self._frame is not None else None
 
 
-@dataclass
-class CameraObservation:
-    """Нормализованный результат camera + vision модели.
-    depth_map: 3×5 (NEAR/MID/FAR × left..right), chars: _ O T."""
-
-    depth_map: list
-    description: Optional[str]
-    target_x: Optional[float]
-
-
 class ProximitySensor(Protocol):
     """Интерфейс датчика расстояния."""
 
@@ -108,13 +86,10 @@ class ProximitySensor(Protocol):
 
 
 class CameraDetector(Protocol):
-    """Интерфейс обработки кадра с камеры."""
+    """Интерфейс захвата изображения с камеры (без LLM)."""
 
-    def read_observation(self, state_id: str) -> Optional[CameraObservation]:
-        ...
-
-    def get_last_image_path(self) -> Optional[str]:
-        ...
+    def read_image_path(self, state_id: str) -> Optional[str]:
+        """Захватывает кадр, сохраняет, возвращает путь к файлу или None."""
 
     def close(self) -> None:
         ...
@@ -203,19 +178,16 @@ class UltrasonicProximitySensor:
 class MockCameraDetector:
     """Заглушка камеры: не подмешивает данные в решения brain."""
 
-    def read_observation(self, state_id: str) -> Optional[CameraObservation]:
+    def read_image_path(self, state_id: str) -> Optional[str]:
         _ = state_id
         return None
 
-    def get_last_image_path(self) -> Optional[str]:
-        return None
-
     def close(self) -> None:
-        return None
+        pass
 
 
 class OpenCVCameraDetector:
-    """One-shot захват изображения с USB-камеры."""
+    """One-shot захват изображения с USB-камеры (без LLM, только OpenCV)."""
 
     def __init__(
         self,
@@ -225,14 +197,7 @@ class OpenCVCameraDetector:
         height: int = CAMERA_HEIGHT,
         fps: float = CAMERA_FPS,
         keep_last: int = CAPTURE_KEEP_LAST,
-        ollama_base_url: str = OLLAMA_BASE_URL,
-        ollama_model: str = OLLAMA_MODEL,
-        ollama_timeout_s: float = OLLAMA_TIMEOUT_S,
-        ollama_temperature: float = OLLAMA_TEMPERATURE,
-        ollama_num_predict: int = OLLAMA_NUM_PREDICT,
-        ollama_keep_alive: str = OLLAMA_KEEP_ALIVE,
         frame_buffer: Optional[FrameBuffer] = None,
-        log_llm_verbose: bool = False,
     ) -> None:
         self._capture_dir = capture_dir
         self._frame_buffer = frame_buffer
@@ -241,15 +206,7 @@ class OpenCVCameraDetector:
         self._height = height
         self._fps = fps
         self._keep_last = max(1, int(keep_last))
-        self._ollama_base_url = str(ollama_base_url).rstrip("/")
-        self._ollama_model = str(ollama_model)
-        self._ollama_timeout_s = max(0.1, float(ollama_timeout_s))
-        self._ollama_temperature = max(0.0, float(ollama_temperature))
-        self._ollama_num_predict = max(1, int(ollama_num_predict))
-        self._ollama_keep_alive = str(ollama_keep_alive)
-        self._log_llm_verbose = bool(log_llm_verbose)
         self._cap = None
-        self._last_image_path: Optional[str] = None
         self._open_warning_logged = False
 
     def _ensure_open(self) -> bool:
@@ -280,172 +237,7 @@ class OpenCVCameraDetector:
         self._open_warning_logged = False
         return True
 
-    @staticmethod
-    def _vision_system_prompt() -> str:
-        return (
-            "JSON: {depth_map, description, target_x}. "
-            "depth_map: 3 strings, 5 chars each. This is a DEPTH MAP of what the camera sees in front. "
-            "Row 0 = NEAR (closest to camera: floor, legs, nearby obstacles). "
-            "Row 1 = MID (medium distance). Row 2 = FAR (distant: walls, horizon, far objects). "
-            "Cols: 0=left, 1=left-center, 2=center, 3=right-center, 4=right. "
-            "Chars: _ = empty, O = obstacle (wall, furniture, chair, person, anything to avoid), T = target (toy, ball, object to approach). "
-            "Put O where obstacles block the path. Put T where the interesting target is. "
-            "description: 5-15 words. target_x: -1 to 1 (horizontal offset of target, null if none)."
-        )
-
-    @staticmethod
-    def _vision_user_prompt(state_id: str) -> str:
-        payload = {
-            "state_id": state_id,
-            "task": (
-                "From this image build a depth_map: 3 rows (NEAR, MID, FAR) × 5 cols (left to right). "
-                "NEAR = what is close (obstacles, floor). MID = medium. FAR = distant (target toy, wall). "
-                "Use _ for empty, O for obstacles, T for target/toy. Example: [\"O____\", \"_____\", \"__T__\"] = obstacle left, target center-far."
-            ),
-        }
-        return json.dumps(payload, ensure_ascii=True, sort_keys=True)
-
-    def _request_ollama(self, image_path: Path, state_id: str) -> Optional[Dict[str, Any]]:
-        started_at = time.perf_counter()
-
-        def elapsed_s() -> float:
-            return time.perf_counter() - started_at
-
-        try:
-            image_b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
-        except OSError as exc:
-            LOGGER.warning("Не удалось прочитать снимок для Ollama: %s", exc)
-            return None
-
-        request_payload = {
-            "model": self._ollama_model,
-            "stream": False,
-            "format": "json",
-            "keep_alive": self._ollama_keep_alive,
-            "options": {
-                "temperature": self._ollama_temperature,
-                "num_predict": self._ollama_num_predict,
-            },
-            "messages": [
-                {"role": "system", "content": self._vision_system_prompt()},
-                {
-                    "role": "user",
-                    "content": self._vision_user_prompt(state_id),
-                    "images": [image_b64],
-                },
-            ],
-        }
-        body = json.dumps(request_payload).encode("utf-8")
-        req = urllib.request.Request(
-            url=self._ollama_base_url + "/api/chat",
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=self._ollama_timeout_s) as response:
-                raw = response.read().decode("utf-8", errors="replace")
-            if self._log_llm_verbose:
-                LOGGER.info("Vision LLM raw response (state_id=%s):\n%s", state_id, raw[:4000] + ("..." if len(raw) > 4000 else ""))
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            LOGGER.error("Vision Ollama request failed (state_id=%s): %s", state_id, exc)
-            return None
-
-        try:
-            decoded = json.loads(raw)
-        except json.JSONDecodeError:
-            LOGGER.error("Vision Ollama returned non-JSON payload (state_id=%s)", state_id)
-            return None
-        if not isinstance(decoded, dict):
-            LOGGER.error("Vision Ollama response not a dict (state_id=%s)", state_id)
-            return None
-
-        message = decoded.get("message", {})
-        if not isinstance(message, dict):
-            LOGGER.error("Vision Ollama message not a dict (state_id=%s)", state_id)
-            return None
-        content = message.get("content")
-        if not isinstance(content, str):
-            LOGGER.error("Vision Ollama content not a string (state_id=%s)", state_id)
-            return None
-
-        json_text = self._extract_json_object_text(content)
-        try:
-            parsed = json.loads(json_text)
-        except json.JSONDecodeError:
-            preview = content.replace("\n", " ")[:220]
-            LOGGER.error(
-                "Vision LLM invalid JSON (state_id=%s): %r",
-                state_id,
-                preview,
-            )
-            return None
-        if not isinstance(parsed, dict):
-            LOGGER.error("Vision LLM parsed content not a JSON object (state_id=%s)", state_id)
-            return None
-        LOGGER.info("Vision Ollama response time: %.3f s (model=%s state_id=%s)", elapsed_s(), self._ollama_model, state_id)
-        return parsed
-
-    @staticmethod
-    def _extract_json_object_text(content: str) -> str:
-        """Достаёт JSON-объект из текста ответа модели."""
-        raw = content.strip()
-        fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", raw, flags=re.DOTALL | re.IGNORECASE)
-        if fenced:
-            return fenced.group(1).strip()
-        first = raw.find("{")
-        last = raw.rfind("}")
-        if first != -1 and last != -1 and last > first:
-            return raw[first : last + 1]
-        return raw
-
-    @staticmethod
-    def _extract_depth_map(payload: Dict[str, Any]) -> list:
-        """Берёт depth_map из ответа LLM. Если невалиден — дефолт."""
-        depth_map = payload.get("depth_map")
-        if (
-            isinstance(depth_map, list)
-            and len(depth_map) == 3
-            and all(isinstance(r, str) and len(r) == 5 for r in depth_map)
-        ):
-            rows = [str(r)[:5].ljust(5) for r in depth_map]
-            # Нормализуем символы: только _, O, T
-            result = []
-            for row in rows:
-                norm = "".join(
-                    c if c in "OT_" else "_" for c in row
-                )
-                result.append(norm)
-            return result
-        LOGGER.error(
-            "Vision LLM invalid depth_map (expected 3 strings of 5 chars): %r",
-            depth_map,
-        )
-        return list(DEFAULT_DEPTH_MAP)
-
-    @staticmethod
-    def _normalize_vision_payload(payload: Dict[str, Any]) -> CameraObservation:
-        description = payload.get("description")
-        if description is not None:
-            description = str(description).strip() or None
-
-        target_x = payload.get("target_x")
-        try:
-            target_x = float(target_x) if target_x is not None else None
-        except (TypeError, ValueError):
-            target_x = None
-        if target_x is not None:
-            target_x = max(-1.0, min(1.0, target_x))
-        depth_map = OpenCVCameraDetector._extract_depth_map(payload)
-
-        return CameraObservation(
-            depth_map=depth_map,
-            description=description,
-            target_x=target_x,
-        )
-
-    def read_observation(self, state_id: str) -> Optional[CameraObservation]:
-        self._last_image_path = None
+    def read_image_path(self, state_id: str) -> Optional[str]:
         if not self._ensure_open():
             return None
 
@@ -468,22 +260,7 @@ class OpenCVCameraDetector:
                 self._frame_buffer.put(jpeg.tobytes())
 
         _prune_capture_images(self._capture_dir, keep_last=self._keep_last)
-        self._last_image_path = str(image_path.resolve())
-        model_payload = self._request_ollama(
-            image_path=image_path,
-            state_id=state_id,
-        )
-        if model_payload is None:
-            LOGGER.error("Vision LLM no valid response, using default depth_map (state_id=%s)", state_id)
-            return CameraObservation(
-                depth_map=list(DEFAULT_DEPTH_MAP),
-                description=None,
-                target_x=None,
-            )
-        return self._normalize_vision_payload(model_payload)
-
-    def get_last_image_path(self) -> Optional[str]:
-        return self._last_image_path
+        return str(image_path.resolve())
 
     def close(self) -> None:
         if self._cap is not None:
@@ -592,19 +369,12 @@ def run_stream_server(
 
 @dataclass
 class VisionConfig:
-    """Конфигурация синхронного vision-цикла."""
+    """Конфигурация синхронного vision-цикла (захват кадра + ultrasonic, без LLM)."""
 
     capture_dir: Path = CAPTURE_DIR
     capture_keep_last: int = CAPTURE_KEEP_LAST
     stream_port: int = STREAM_DEFAULT_PORT
     stream_enabled: bool = True
-    log_llm_verbose: bool = False
-    ollama_base_url: str = OLLAMA_BASE_URL
-    ollama_model: str = OLLAMA_MODEL
-    ollama_timeout_s: float = OLLAMA_TIMEOUT_S
-    ollama_temperature: float = OLLAMA_TEMPERATURE
-    ollama_num_predict: int = OLLAMA_NUM_PREDICT
-    ollama_keep_alive: str = OLLAMA_KEEP_ALIVE
 
 
 def build_sensors(
@@ -618,14 +388,7 @@ def build_sensors(
         camera = OpenCVCameraDetector(
             capture_dir=config.capture_dir,
             keep_last=config.capture_keep_last,
-            ollama_base_url=config.ollama_base_url,
-            ollama_model=config.ollama_model,
-            ollama_timeout_s=config.ollama_timeout_s,
-            ollama_temperature=config.ollama_temperature,
-            ollama_num_predict=config.ollama_num_predict,
-            ollama_keep_alive=config.ollama_keep_alive,
             frame_buffer=frame_buffer,
-            log_llm_verbose=config.log_llm_verbose,
         )
     return UltrasonicProximitySensor(), camera
 
@@ -669,20 +432,16 @@ def _prune_capture_images(capture_dir: Path, keep_last: int) -> None:
 
 
 def _build_state(state_counter: int, proximity: ProximitySensor, camera: CameraDetector) -> RobotState:
-    """Формирует единый state из всех входов vision."""
+    """Формирует единый state из всех входов vision (захват кадра + ultrasonic)."""
     state_id = f"st_{state_counter:06d}"
 
     proximity_state = ProximityState()
     camera_state = CameraState()
 
     try:
-        observation = camera.read_observation(state_id)
-        if observation is not None:
-            camera_state = CameraState(
-                depth_map=observation.depth_map,
-                description=observation.description,
-                target_x=observation.target_x,
-            )
+        image_path = camera.read_image_path(state_id)
+        if image_path is not None:
+            camera_state = CameraState(image_path=image_path)
     except Exception as exc:  # pragma: no cover
         LOGGER.error("Ошибка чтения камеры: %s", exc)
 
@@ -711,7 +470,7 @@ def print_stream_instructions(port: int = STREAM_DEFAULT_PORT) -> None:
 
 
 def run_vision_loop(config: VisionConfig, stop_event: Optional[threading.Event] = None) -> None:
-    """Основной цикл vision: синхронный capture -> LLM -> ultrasonic -> state write."""
+    """Основной цикл vision: capture (OpenCV) -> ultrasonic -> state write (без LLM)."""
     stop_event = stop_event or threading.Event()
     _clear_capture_images(config.capture_dir)
 
@@ -736,27 +495,15 @@ def run_vision_loop(config: VisionConfig, stop_event: Optional[threading.Event] 
 
 
 def parse_args() -> VisionConfig:
-    parser = argparse.ArgumentParser(description="Vision module")
+    parser = argparse.ArgumentParser(description="Vision module (capture + ultrasonic, no LLM)")
     parser.add_argument("--capture-keep-last", type=int, default=VisionConfig.capture_keep_last, help="Сколько последних снимков хранить")
-    parser.add_argument("--ollama-base-url", default=VisionConfig.ollama_base_url, help="Ollama URL, e.g. http://192.168.1.100:11434")
-    parser.add_argument("--ollama-model", default=VisionConfig.ollama_model, help="Ollama model tag for vision")
-    parser.add_argument("--ollama-timeout-s", type=float, default=VisionConfig.ollama_timeout_s, help="Timeout запроса vision модели")
-    parser.add_argument("--ollama-temperature", type=float, default=VisionConfig.ollama_temperature, help="Sampling temperature для vision модели")
-    parser.add_argument("--ollama-num-predict", type=int, default=VisionConfig.ollama_num_predict, help="Макс. токенов в ответе vision модели")
     parser.add_argument("--stream-port", type=int, default=STREAM_DEFAULT_PORT, help="Порт для видеопотока в браузере")
     parser.add_argument("--no-stream", action="store_true", help="Отключить видеопоток в браузере")
-    parser.add_argument("--verbose", action="store_true", help="Логировать сырой ответ vision-модели")
     args = parser.parse_args()
     return VisionConfig(
         capture_keep_last=max(1, int(args.capture_keep_last)),
-        ollama_base_url=str(args.ollama_base_url),
-        ollama_model=str(args.ollama_model),
-        ollama_timeout_s=max(0.1, float(args.ollama_timeout_s)),
-        ollama_temperature=max(0.0, float(args.ollama_temperature)),
-        ollama_num_predict=max(1, int(args.ollama_num_predict)),
         stream_port=max(1024, int(args.stream_port)),
         stream_enabled=not args.no_stream,
-        log_llm_verbose=args.verbose,
     )
 
 

@@ -4,8 +4,8 @@
 
 ## Что делает каждый модуль
 
-- `vision.py` — генерирует новое состояние робота и пишет `state.json`
-- `brain.py` — читает `state.json`, принимает решение, пишет `command.json`
+- `vision.py` — захватывает кадр камеры (OpenCV) и пишет `state.json`
+- `brain.py` — читает `state.json`, отправляет изображение + текст в vision-модель (Ollama), принимает решение, пишет `command.json`
 - `controller.py` — исполняет команду из `command.json` на моторах
 - `main.py` — поднимает все потоки и корректно завершает систему
 - `shared.py` — общие модели (`RobotState`, `RobotCommand`) и безопасный JSON I/O
@@ -61,10 +61,8 @@ flowchart LR
 `state.json` содержит входы сенсоров:
 
 - `state_id`
-- `sensor.obstacle_cm`
-- `camera.depth_map` — карта глубины 3×5 (NEAR/MID/FAR × left..right), символы: `_` пусто, `O` препятствие, `T` цель
-- `camera.description`
-- `camera.target_x`
+- `sensor.obstacle_cm` — расстояние до препятствия в см (ultrasonic)
+- `camera.image_path` — путь к захваченному изображению (OpenCV) для обработки в brain
 
 ## Формат `command.json`
 
@@ -126,15 +124,15 @@ python3 vision.py --interval 3
 python3 brain.py
 ```
 
-Пример запуска с локальной моделью Ollama:
+Требуется vision-модель (поддержка text + image), например `gemma3`. Пример:
 
 ```bash
 python3 brain.py \
   --ollama-base-url http://192.168.0.10:11434 \
-  --ollama-model qwen2.5:7b \
-  --ollama-timeout-s 8 \
+  --ollama-model gemma3 \
+  --ollama-timeout-s 100 \
   --llm-temperature 0.1 \
-  --llm-num-predict 96
+  --llm-num-predict 256
 ```
 
 ### Controller (автоматический режим)
@@ -177,12 +175,12 @@ ollama --version
 curl http://192.168.0.10:11434/api/tags
 ```
 
-### 2) Загрузка модели до 10 ГБ
+### 2) Загрузка vision-модели (text + image)
 
-Рекомендуемый старт:
+Рекомендуемый старт для робота:
 
 ```bash
-ollama pull qwen2.5:7b
+ollama pull gemma3
 ```
 
 Проверить локально скачанные модели:
@@ -205,7 +203,7 @@ ollama run qwen2.5:7b "Return JSON only: {\"action\":\"STOP\",\"reason\":\"healt
 
 ### 5) Интеграция с `brain.py`
 
-`brain.py` отправляет в Ollama состояние робота и ожидает строго JSON-решение:
+`brain.py` отправляет в Ollama изображение с камеры + данные датчиков (vision-модель) и ожидает строго JSON-решение:
 
 - `action`: `STEP_FORWARD | STEP_BACKWARD | TURN_LEFT_15 | TURN_LEFT_45 | TURN_RIGHT_15 | TURN_RIGHT_45 | STOP | LIGHT_ON | LIGHT_OFF`
 - `reason`: краткая причина

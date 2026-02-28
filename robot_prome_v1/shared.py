@@ -67,16 +67,6 @@ DEFAULT_GRID_5X5 = [
     GRID_EMPTY * 5,
 ]
 
-# Карта глубины: 3 строки (NEAR, MID, FAR) × 5 колонок (слева направо).
-# row 0 = NEAR (близко к камере), row 1 = MID, row 2 = FAR.
-# cols: 0=left, 1=left-center, 2=center, 3=right-center, 4=right.
-# Символы: _ = пусто, O = препятствие, T = цель (игрушка).
-DEFAULT_DEPTH_MAP = [
-    GRID_EMPTY * 5,  # NEAR
-    GRID_EMPTY * 5,  # MID
-    GRID_EMPTY * 5,  # FAR
-]
-
 PathLike = Union[str, Path]
 GPIO_LOCK = threading.RLock()
 
@@ -89,9 +79,7 @@ def zero_state_payload() -> Dict[str, Any]:
             "obstacle_cm": None,
         },
         "camera": {
-            "depth_map": DEFAULT_DEPTH_MAP,
-            "description": None,
-            "target_x": None,
+            "image_path": None,
         },
     }
 
@@ -159,44 +147,19 @@ class ProximityState:
 
 @dataclass
 class CameraState:
-    """Состояние камеры. depth_map — карта глубины: 3×5 (NEAR/MID/FAR × left..right).
-    Символы: '_' пусто, 'O' препятствие, 'T' цель."""
+    """Состояние камеры: путь к захваченному изображению (OpenCV)."""
 
-    depth_map: Optional[list] = field(default_factory=lambda: list(DEFAULT_DEPTH_MAP))
-    description: Optional[str] = None
-    target_x: Optional[float] = None
+    image_path: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "depth_map": self.depth_map,
-            "description": self.description,
-            "target_x": self.target_x,
-        }
+        return {"image_path": self.image_path}
 
     @classmethod
     def from_dict(cls, payload: Dict[str, Any]) -> "CameraState":
-        depth_map = payload.get("depth_map")
-        if not (
-            isinstance(depth_map, list)
-            and len(depth_map) == 3
-            and all(isinstance(r, str) and len(r) == 5 for r in depth_map)
-        ):
-            depth_map = list(DEFAULT_DEPTH_MAP)
-        target_x = payload.get("target_x")
-        try:
-            target_x = float(target_x) if target_x is not None else None
-        except (TypeError, ValueError):
-            target_x = None
-        if target_x is not None:
-            target_x = max(-1.0, min(1.0, target_x))
-        description = payload.get("description")
-        if description is not None:
-            description = str(description).strip() or None
-        return cls(
-            depth_map=depth_map,
-            description=description,
-            target_x=target_x,
-        )
+        image_path = payload.get("image_path")
+        if image_path is not None:
+            image_path = str(image_path).strip() or None
+        return cls(image_path=image_path)
 
 
 @dataclass

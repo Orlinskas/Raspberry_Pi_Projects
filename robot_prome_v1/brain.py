@@ -13,6 +13,7 @@ command.json не содержит params.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import logging
 import os
@@ -22,12 +23,15 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from shared import ACTIONS, RobotCommand, RobotState, atomic_write_json, read_json
 
 LOGGER = logging.getLogger("brain")
 POLL_WAIT_S = 0.1
+
+# Задача робота — можно менять для смены поведения
+ROBOT_TASK = "Find and play with a toy"
 
 
 def _json_line(payload) -> str:
@@ -44,8 +48,8 @@ class BrainConfig:
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://192.168.0.18:11434")
     ollama_model: str = os.getenv("OLLAMA_BRAIN_MODEL", "gemma3")
     ollama_timeout_s: float = float(os.getenv("OLLAMA_TIMEOUT_S", "100"))
-    llm_temperature: float = 0.1
-    llm_num_predict: int = 256
+    llm_temperature: float = 0.5
+    llm_num_predict: int = 512
     llm_keep_alive: str = os.getenv("OLLAMA_KEEP_ALIVE", "60m")
     log_llm_verbose: bool = False
 
@@ -69,36 +73,43 @@ class BrainEngine:
 
     @staticmethod
     def _build_llm_prompt(state: RobotState) -> str:
-        """Формирует минимальный контекст состояния для LLM."""
+        """Формирует контекст состояния для LLM (sensor + metadata)."""
         payload = {
             "state_id": state.state_id,
             "sensor": state.sensor.to_dict(),
-            "camera": state.camera.to_dict(),
         }
         return json.dumps(payload, ensure_ascii=True, sort_keys=True)
 
     @staticmethod
+    def _load_image_base64(image_path: Optional[str]) -> Optional[str]:
+        """Читает изображение и возвращает base64-строку или None."""
+        if not image_path:
+            return None
+        path = Path(image_path)
+        if not path.exists() or not path.is_file():
+            return None
+        try:
+            return base64.b64encode(path.read_bytes()).decode("ascii")
+        except OSError:
+            return None
+
+    @staticmethod
     def _system_prompt() -> str:
         allowed_actions = ", ".join(ACTIONS)
-        return f"""## Description
+        return f"""You are a decision engine for a small (40x40 cm) robot.
 
-You are a decision engine for a mobile robot. The robot is small and curious; it should approach toys when safe.
+**Task:** {ROBOT_TASK}.
 
-**Input:** State JSON with:
-- sensor.obstacle_cm — front distance in cm (null if unavailable)
-- camera.depth_map — depth map 3×5: row 0=NEAR (close), row 1=MID, row 2=FAR. Cols: 0=left..4=right. Chars: '_' empty, 'O' obstacle, 'T' target.
-- camera.description — short scene summary (or null)
-- camera.target_x — horizontal offset of target -1..1 (null if none)
+You receive:
+1. An image from the robot's front camera (what the robot sees ahead)
+2. sensor.obstacle_cm — distance to the nearest obstacle in front, in cm (null if unavailable). Safe distance: >= 50 cm. Below 50 cm — be cautious (turn away, back up, or stop).
 
-## Task
-
-Output ONLY a JSON object with keys: action, reason.
-Allowed action values: {allowed_actions}
+Output ONLY a JSON object with keys: action, reason. Allowed action values: {allowed_actions}
 Do not add markdown, comments, or extra keys.
 
 ## Commands
 
-**Movement (drives a short distance then stops by itself):**
+**Movement (drives a short distance then stops):**
 - STEP_FORWARD — move forward
 - STEP_BACKWARD — move backward
 
@@ -113,29 +124,38 @@ Do not add markdown, comments, or extra keys.
 
 ## Rules
 
-1. **Safety first (strict priority):**
-   - If sensor.obstacle_cm is not null and <= 50: avoid obstacle (TURN_LEFT_15, TURN_LEFT_45, TURN_RIGHT_15, TURN_RIGHT_45, or STEP_BACKWARD)
-   - If depth_map has 'O' in NEAR row (row 0): obstacle blocks path — turn AWAY from obstacle. O in cols 0–1 → TURN_RIGHT. O in cols 3–4 → TURN_LEFT. O in center (col 2) → TURN_LEFT or TURN_RIGHT.
+1. **Safety and navigation:**
+   - Combine the image and sensor.obstacle_cm to assess the situation. Obstacles in the image (wall, furniture, chair, legs, person) and low distance readings both suggest caution — turn away, back up, or stop as you see fit.
+   - Obstacle on left → consider TURN_RIGHT. Obstacle on right → consider TURN_LEFT. Obstacle center → TURN_LEFT or TURN_RIGHT.
 
-2. **Target seeking (when safe):**
-   - If camera.description mentions toy-like object (toy, ball, teddy): prefer moving toward it
-   - Infer target position from depth_map: find 'T' in any row. cols 0–1 = left → TURN_LEFT; cols 3–4 = right → TURN_RIGHT; col 2 = center → STEP_FORWARD
-   - Use camera.target_x if present; else infer from depth_map (which col has 'T')
-   - Target left of center → TURN_LEFT_15 or TURN_LEFT_45 (use 45 for cols 0 or 4)
-   - Target at center → STEP_FORWARD
-   - Target right of center → TURN_RIGHT_15 or TURN_RIGHT_45 (use 45 for cols 0 or 4)
-   - No target visible → slow search turn (TURN_LEFT_15 or TURN_RIGHT_15)
+2. **Target seeking (when obstacle_cm >= 50 or null):**
+   - Goal: keep the toy in the center of the image. If the toy is offset — turn towards it first. Do not drive forward past a toy that is off-center; you will miss it.
+   - Toy on left side → TURN_LEFT_15 or TURN_LEFT_45 (turn until it moves toward center)
+   - Toy at center → STEP_FORWARD
+   - Toy on right side → TURN_RIGHT_15 or TURN_RIGHT_45 (turn until it moves toward center)
+   - No toy visible → slow search turn (TURN_LEFT_15 or TURN_RIGHT_15) to find it
 
-3. **Light:** Enable light in dark rooms. Blink at nearby toys (LIGHT_ON, LIGHT_OFF) but do not get stuck in light-only loops.
-
-4. **Avoid excessive turns:** If state is safe and target is near center (col 2 or target_x in [-0.2,0.2]), prefer STEP_FORWARD."""
+3. **Light:** If the image looks dark (low lighting, poorly lit room, shadows) — use LIGHT_ON to illuminate the scene. You can also use LIGHT_ON to draw attention to nearby toys. Use LIGHT_OFF when there is enough light. Avoid getting stuck in light-only loops (alternating LIGHT_ON/LIGHT_OFF repeatedly without movement)."""
 
     def _request_ollama(self, state: RobotState) -> Optional[Dict[str, Any]]:
-        """Делает запрос к Ollama и возвращает JSON-ответ модели."""
+        """Делает запрос к Ollama (vision model) и возвращает JSON-ответ."""
         started_at = time.perf_counter()
 
         def elapsed_s() -> float:
             return time.perf_counter() - started_at
+
+        context = self._build_llm_prompt(state)
+        images: List[str] = []
+        image_b64 = self._load_image_base64(state.camera.image_path)
+        if image_b64 is not None:
+            images.append(image_b64)
+            user_content = "Analyze this image and decide the robot action. Context: " + context
+        else:
+            user_content = "No image available. Decide based on sensor only (prefer STOP if unsure). Context: " + context
+
+        user_message: Dict[str, Any] = {"role": "user", "content": user_content}
+        if images:
+            user_message["images"] = images
 
         url = self.config.ollama_base_url.rstrip("/") + "/api/chat"
         request_payload = {
@@ -149,7 +169,7 @@ Do not add markdown, comments, or extra keys.
             },
             "messages": [
                 {"role": "system", "content": self._system_prompt()},
-                {"role": "user", "content": self._build_llm_prompt(state)},
+                user_message,
             ],
         }
         body = json.dumps(request_payload).encode("utf-8")

@@ -67,7 +67,6 @@ def main() -> None:
     vision_config = VisionConfig(
         stream_port=args.stream_port,
         stream_enabled=not args.no_stream,
-        log_llm_verbose=args.verbose,
     )
     brain_config = BrainConfig(
         state_path=state_path,
