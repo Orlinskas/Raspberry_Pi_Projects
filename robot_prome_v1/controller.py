@@ -237,13 +237,16 @@ def run_controller_loop(
 ) -> None:
     """Режим автомата: читает команду из файла и исполняет ее."""
     stop_event = stop_event or threading.Event()
+    command_path = Path(command_path)
     last_command_id = ""
+
     if enable_motors:
         setup()
         LOGGER.info("Controller запущен. command_path=%s", command_path)
     else:
         LOGGER.info("Controller запущен в DRY режиме. command_path=%s", command_path)
 
+    global _ACTION_UNTIL_TS
     try:
         while not stop_event.is_set():
             raw = read_json(command_path)
@@ -263,6 +266,7 @@ def run_controller_loop(
             elif 0 < _ACTION_UNTIL_TS <= time.time():
                 if enable_motors:
                     stop()
+                _ACTION_UNTIL_TS = 0.0
             stop_event.wait(poll_interval_s)
     finally:
         if enable_motors:

@@ -82,7 +82,8 @@ flowchart LR
 
 ## Логи
 
-- `brain` выводит `STATE used` и `COMMAND generated` в консоль в pretty-print JSON
+- `vision` выводит `STATE written` в консоль в pretty-print JSON
+- `brain` выводит `COMMAND generated` в консоль в pretty-print JSON
 - остальные модули логируют жизненный цикл и технические события
 
 ## Видеопоток камеры

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import socket
@@ -26,11 +27,15 @@ from shared import (
     ProximityState,
     RobotState,
     atomic_write_json,
+    get_effective_duration_ms,
+    read_json,
 )
 
 LOGGER = logging.getLogger("vision")
 STATE_PATH = Path(__file__).with_name("protocol") / "state.json"
 CAPTURE_DIR = Path(__file__).with_name("captures")
+COMMAND_PATH = Path(__file__).with_name("protocol") / "command.json"
+VISION_POLL_WAIT_S = 0.1
 
 ECHO_PIN = 0
 TRIG_PIN = 1
@@ -375,6 +380,7 @@ class VisionConfig:
     capture_keep_last: int = CAPTURE_KEEP_LAST
     stream_port: int = STREAM_DEFAULT_PORT
     stream_enabled: bool = True
+    command_path: Path = COMMAND_PATH
 
 
 def build_sensors(
@@ -411,6 +417,35 @@ def _clear_capture_images(capture_dir: Path) -> None:
             LOGGER.warning("Не удалось удалить старый снимок %s: %s", path, exc)
     if deleted:
         LOGGER.info("Очищен каталог снимков: удалено %s файлов", deleted)
+
+
+def _wait_for_command_duration(
+    command_path: Path,
+    last_processed_command_id: str,
+    stop_event: threading.Event,
+) -> Optional[str]:
+    """Ждёт новую команду, затем duration_ms по ACTION_DURATION_MS. Возвращает command_id или None при stop."""
+    while not stop_event.is_set():
+        raw = read_json(command_path)
+        if not isinstance(raw, dict):
+            stop_event.wait(VISION_POLL_WAIT_S)
+            continue
+        command_id = str(raw.get("command_id", ""))
+        if not command_id:
+            stop_event.wait(VISION_POLL_WAIT_S)
+            continue
+        if command_id == last_processed_command_id:
+            stop_event.wait(VISION_POLL_WAIT_S)
+            continue
+        action = str(raw.get("action", "STOP"))
+        LOGGER.info("Vision: new command %s (%s), waiting %.2fs", command_id, action, get_effective_duration_ms(action) / 1000.0)
+        duration_ms = get_effective_duration_ms(action)
+        duration_s = duration_ms / 1000.0
+        deadline = time.monotonic() + duration_s
+        while time.monotonic() < deadline and not stop_event.is_set():
+            stop_event.wait(min(VISION_POLL_WAIT_S, max(0, deadline - time.monotonic())))
+        return command_id
+    return None
 
 
 def _prune_capture_images(capture_dir: Path, keep_last: int) -> None:
@@ -470,7 +505,7 @@ def print_stream_instructions(port: int = STREAM_DEFAULT_PORT) -> None:
 
 
 def run_vision_loop(config: VisionConfig, stop_event: Optional[threading.Event] = None) -> None:
-    """Основной цикл vision: capture (OpenCV) -> ultrasonic -> state write (без LLM)."""
+    """Основной цикл vision: ждёт завершения команды -> capture -> ultrasonic -> state write."""
     stop_event = stop_event or threading.Event()
     _clear_capture_images(config.capture_dir)
 
@@ -482,13 +517,24 @@ def run_vision_loop(config: VisionConfig, stop_event: Optional[threading.Event] 
 
     proximity, camera = build_sensors(config, frame_buffer=frame_buffer)
     counter = 0
-    LOGGER.info("Vision запущен. state_path=%s mode=sync", STATE_PATH)
+    LOGGER.info("Vision запущен. state_path=%s (ждёт duration по ACTION_DURATION_MS)", STATE_PATH)
 
+    last_processed_command_id = ""
     try:
         while not stop_event.is_set():
+            command_id = _wait_for_command_duration(
+                config.command_path,
+                last_processed_command_id,
+                stop_event,
+            )
+            if command_id is None:
+                break
+            last_processed_command_id = command_id
             counter += 1
             state = _build_state(counter, proximity, camera)
-            atomic_write_json(STATE_PATH, state.to_dict())
+            state_payload = state.to_dict()
+            atomic_write_json(STATE_PATH, state_payload)
+            LOGGER.info("STATE written:\n%s", json.dumps(state_payload, ensure_ascii=False, indent=2, sort_keys=True))
     finally:
         camera.close()
         LOGGER.info("Vision остановлен")
@@ -499,11 +545,13 @@ def parse_args() -> VisionConfig:
     parser.add_argument("--capture-keep-last", type=int, default=VisionConfig.capture_keep_last, help="Сколько последних снимков хранить")
     parser.add_argument("--stream-port", type=int, default=STREAM_DEFAULT_PORT, help="Порт для видеопотока в браузере")
     parser.add_argument("--no-stream", action="store_true", help="Отключить видеопоток в браузере")
+    parser.add_argument("--command-path", default=str(COMMAND_PATH), help="Path to protocol/command.json")
     args = parser.parse_args()
     return VisionConfig(
         capture_keep_last=max(1, int(args.capture_keep_last)),
         stream_port=max(1024, int(args.stream_port)),
         stream_enabled=not args.no_stream,
+        command_path=Path(args.command_path),
     )
 
 

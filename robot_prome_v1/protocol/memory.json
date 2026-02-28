@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "action_history": [
     {
       "state_id": "st_014835",
@@ -8,6 +7,48 @@
       "reason": "Safe state, no obstacles, robot at center",
       "obstacle_cm": null,
       "ts": 1772240851.139106
+    },
+    {
+      "state_id": "st_000000",
+      "command_id": "cmd_000000",
+      "action": "STOP",
+      "reason": "initial_state",
+      "obstacle_cm": null
+    },
+    {
+      "state_id": "st_012361",
+      "command_id": "cmd_000001",
+      "action": "STOP",
+      "reason": "Safe state, no obstacles",
+      "obstacle_cm": null
+    },
+    {
+      "state_id": "st_009941",
+      "command_id": "cmd_000002",
+      "action": "STOP",
+      "reason": "No obstacles detected, safe state",
+      "obstacle_cm": null
+    },
+    {
+      "state_id": "st_013097",
+      "command_id": "cmd_000003",
+      "action": "STOP",
+      "reason": "No image available, sensor indicates no obstacles, continuing from safe state.",
+      "obstacle_cm": null
+    },
+    {
+      "state_id": "st_000000",
+      "command_id": "cmd_000000",
+      "action": "STOP",
+      "reason": "initial_state",
+      "obstacle_cm": null
+    },
+    {
+      "state_id": "st_017853",
+      "command_id": "cmd_000001",
+      "action": "STOP",
+      "reason": "No image available, sensor indicates no obstacles, safe state",
+      "obstacle_cm": null
     }
   ]
 }

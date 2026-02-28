@@ -48,9 +48,9 @@ class BrainConfig:
     command_path: Path = Path(__file__).with_name("protocol") / "command.json"
     memory_path: Path = Path(__file__).with_name("protocol") / "memory.json"
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://192.168.0.18:11434")
-    ollama_model: str = os.getenv("OLLAMA_BRAIN_MODEL", "gemma3")
+    ollama_model: str = os.getenv("OLLAMA_BRAIN_MODEL", "qwen3.5:397b-cloud")
     ollama_timeout_s: float = float(os.getenv("OLLAMA_TIMEOUT_S", "100"))
-    llm_temperature: float = 0.5
+    llm_temperature: float = 0.2
     llm_num_predict: int = 512
     llm_keep_alive: str = os.getenv("OLLAMA_KEEP_ALIVE", "60m")
     log_llm_verbose: bool = False
@@ -154,6 +154,8 @@ Do not add markdown, comments, or extra keys.
         context = self._build_llm_prompt(state)  # includes recent_actions from memory
         images: List[str] = []
         image_b64 = self._load_image_base64(state.camera.image_path)
+        if image_b64 is None and state.camera.image_path:
+            LOGGER.warning("Brain: image_path=%r but failed to load", state.camera.image_path)
         if image_b64 is not None:
             images.append(image_b64)
             user_content = "Analyze this image and decide the robot action. Context: " + context
@@ -185,7 +187,7 @@ Do not add markdown, comments, or extra keys.
             with urllib.request.urlopen(req, timeout=self.config.ollama_timeout_s) as response:
                 raw = response.read().decode("utf-8", errors="replace")
             if self.config.log_llm_verbose:
-                LOGGER.info("Brain LLM raw response:\n%s", raw[:4000] + ("..." if len(raw) > 4000 else ""))
+                LOGGER.info("Brain LLM raw response: %s", raw)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             LOGGER.warning("Ollama request failed in %.3f s: %s", elapsed_s(), exc)
             return None
@@ -267,7 +269,7 @@ def run_brain_loop(config: BrainConfig, stop_event: Optional[threading.Event] = 
             stop_event.wait(POLL_WAIT_S)
             continue
 
-        LOGGER.info("STATE used:\n%s", _json_line(raw_state))
+        LOGGER.info("Brain: deciding for state_id=%s (calling Ollama)", state.state_id)
         command = engine.decide(state)
         command_payload = command.to_dict()
         atomic_write_json(config.command_path, command_payload)
