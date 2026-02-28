@@ -93,6 +93,11 @@ def zero_command_payload() -> Dict[str, Any]:
     }
 
 
+def zero_memory_payload() -> Dict[str, Any]:
+    """Возвращает пустое состояние памяти (action_history: [])."""
+    return {"action_history": []}
+
+
 def atomic_write_json(path: PathLike, payload: Dict[str, Any]) -> None:
     """Атомарно записывает JSON через временный файл + replace()."""
     target = Path(path)

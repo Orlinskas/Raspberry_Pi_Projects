@@ -12,7 +12,8 @@ from pathlib import Path
 
 from brain import BrainConfig, run_brain_loop
 from controller import run_controller_loop
-from shared import atomic_write_json, read_json, zero_command_payload, zero_state_payload
+from memory import MemoryConfig, run_memory_loop
+from shared import atomic_write_json, read_json, zero_command_payload, zero_memory_payload, zero_state_payload
 from vision import STREAM_DEFAULT_PORT, VisionConfig, run_vision_loop
 
 LOGGER = logging.getLogger("main")
@@ -62,6 +63,7 @@ def main() -> None:
     protocol_dir = Path(__file__).with_name("protocol")
     state_path = protocol_dir / "state.json"
     command_path = protocol_dir / "command.json"
+    memory_path = protocol_dir / "memory.json"
 
     stop_event = threading.Event()
     vision_config = VisionConfig(
@@ -71,12 +73,19 @@ def main() -> None:
     brain_config = BrainConfig(
         state_path=state_path,
         command_path=command_path,
+        memory_path=memory_path,
         log_llm_verbose=args.verbose,
+    )
+    memory_config = MemoryConfig(
+        state_path=state_path,
+        command_path=command_path,
+        memory_path=memory_path,
     )
 
     threads = [
         threading.Thread(target=run_vision_loop, args=(vision_config, stop_event), name="vision", daemon=True),
         threading.Thread(target=run_brain_loop, args=(brain_config, stop_event), name="brain", daemon=True),
+        threading.Thread(target=run_memory_loop, args=(memory_config, stop_event), name="memory", daemon=True),
         threading.Thread(
             target=run_controller_loop,
             args=(command_path, 0.05, stop_event, args.mode == "run"),
@@ -112,7 +121,8 @@ def main() -> None:
         # При завершении системы сбрасываем runtime-файлы в нулевое состояние.
         atomic_write_json(state_path, zero_state_payload())
         atomic_write_json(command_path, zero_command_payload())
-        LOGGER.info("state.json и command.json сброшены в нулевое состояние")
+        atomic_write_json(memory_path, zero_memory_payload())
+        LOGGER.info("state.json, command.json и memory.json сброшены в нулевое состояние")
         LOGGER.info("Main orchestrator остановлен")
 
 

@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from memory import get_recent_actions
 from shared import ACTIONS, RobotCommand, RobotState, atomic_write_json, read_json
 
 LOGGER = logging.getLogger("brain")
@@ -45,6 +46,7 @@ class BrainConfig:
 
     state_path: Path = Path(__file__).with_name("protocol") / "state.json"
     command_path: Path = Path(__file__).with_name("protocol") / "command.json"
+    memory_path: Path = Path(__file__).with_name("protocol") / "memory.json"
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://192.168.0.18:11434")
     ollama_model: str = os.getenv("OLLAMA_BRAIN_MODEL", "gemma3")
     ollama_timeout_s: float = float(os.getenv("OLLAMA_TIMEOUT_S", "100"))
@@ -71,13 +73,15 @@ class BrainEngine:
             reason=reason,
         )
 
-    @staticmethod
-    def _build_llm_prompt(state: RobotState) -> str:
-        """Формирует контекст состояния для LLM (sensor + metadata)."""
-        payload = {
+    def _build_llm_prompt(self, state: RobotState) -> str:
+        """Формирует контекст состояния для LLM (sensor + metadata + recent_actions)."""
+        payload: Dict[str, Any] = {
             "state_id": state.state_id,
             "sensor": state.sensor.to_dict(),
         }
+        recent = get_recent_actions(self.config.memory_path, limit=8)
+        if recent:
+            payload["recent_actions"] = recent
         return json.dumps(payload, ensure_ascii=True, sort_keys=True)
 
     @staticmethod
@@ -103,6 +107,7 @@ class BrainEngine:
 You receive:
 1. An image from the robot's front camera (what the robot sees ahead)
 2. sensor.obstacle_cm — distance to the nearest obstacle in front, in cm (null if unavailable). Safe distance: >= 50 cm. Below 50 cm — be cautious (turn away, back up, or stop).
+3. recent_actions — list of your last actions (state_id, action, reason, obstacle_cm). Use this to avoid repetitive loops.
 
 Output ONLY a JSON object with keys: action, reason. Allowed action values: {allowed_actions}
 Do not add markdown, comments, or extra keys.
@@ -135,7 +140,9 @@ Do not add markdown, comments, or extra keys.
    - Toy on right side → TURN_RIGHT_15 or TURN_RIGHT_45 (turn until it moves toward center)
    - No toy visible → slow search turn (TURN_LEFT_15 or TURN_RIGHT_15) to find it
 
-3. **Light:** If the image looks dark (low lighting, poorly lit room, shadows) — use LIGHT_ON to illuminate the scene. You can also use LIGHT_ON to draw attention to nearby toys. Use LIGHT_OFF when there is enough light. Avoid getting stuck in light-only loops (alternating LIGHT_ON/LIGHT_OFF repeatedly without movement)."""
+3. **Light:** If the image looks dark (low lighting, poorly lit room, shadows) — use LIGHT_ON to illuminate the scene. You can also use LIGHT_ON to draw attention to nearby toys. Use LIGHT_OFF when there is enough light. Avoid getting stuck in light-only loops (alternating LIGHT_ON/LIGHT_OFF repeatedly without movement).
+
+4. **Use recent_actions:** You receive recent_actions (last actions taken). Use this history to avoid loops."""
 
     def _request_ollama(self, state: RobotState) -> Optional[Dict[str, Any]]:
         """Делает запрос к Ollama (vision model) и возвращает JSON-ответ."""
@@ -144,7 +151,7 @@ Do not add markdown, comments, or extra keys.
         def elapsed_s() -> float:
             return time.perf_counter() - started_at
 
-        context = self._build_llm_prompt(state)
+        context = self._build_llm_prompt(state)  # includes recent_actions from memory
         images: List[str] = []
         image_b64 = self._load_image_base64(state.camera.image_path)
         if image_b64 is not None:
@@ -274,6 +281,7 @@ def parse_args() -> BrainConfig:
     parser = argparse.ArgumentParser(description="Brain module")
     parser.add_argument("--state-path", default=str(BrainConfig.state_path), help="Path to protocol/state.json")
     parser.add_argument("--command-path", default=str(BrainConfig.command_path), help="Path to protocol/command.json")
+    parser.add_argument("--memory-path", default=str(BrainConfig.memory_path), help="Path to protocol/memory.json")
     parser.add_argument("--ollama-base-url", default=BrainConfig.ollama_base_url, help="Ollama URL, e.g. http://192.168.1.100:11434")
     parser.add_argument("--ollama-model", default=BrainConfig.ollama_model, help="Ollama model tag for brain")
     parser.add_argument("--ollama-timeout-s", type=float, default=BrainConfig.ollama_timeout_s, help="Timeout for Ollama requests in seconds")
@@ -284,6 +292,7 @@ def parse_args() -> BrainConfig:
     return BrainConfig(
         state_path=Path(args.state_path),
         command_path=Path(args.command_path),
+        memory_path=Path(args.memory_path),
         ollama_base_url=str(args.ollama_base_url),
         ollama_model=str(args.ollama_model),
         ollama_timeout_s=max(0.1, float(args.ollama_timeout_s)),
