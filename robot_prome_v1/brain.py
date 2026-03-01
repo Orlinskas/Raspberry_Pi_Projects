@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""Модуль brain: читает `state.json`, принимает решение и пишет `command.json`.
-
-Команды поворота разделены по углу:
-- TURN_LEFT_15 / TURN_RIGHT_15 — малый поворот (~15°);
-- TURN_LEFT_45 / TURN_RIGHT_45 — большой поворот (~45°).
-
-Все параметры движений (speed, duration_ms) заданы в shared.ACTION_SPEED и ACTION_DURATION_MS.
-command.json не содержит params.
-"""
 
 from __future__ import annotations
 
@@ -31,19 +21,15 @@ from shared import ACTIONS, RobotCommand, RobotState, atomic_write_json, read_js
 LOGGER = logging.getLogger("brain")
 POLL_WAIT_S = 0.1
 
-# Задача робота — можно менять для смены поведения
 ROBOT_TASK = "Find and play with a toy"
 
 
 def _json_line(payload) -> str:
-    """Возвращает JSON с отступами для удобного чтения в консоли."""
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
 
 
 @dataclass
 class BrainConfig:
-    """Настройки путей и порогов логики brain."""
-
     state_path: Path = Path(__file__).with_name("protocol") / "state.json"
     command_path: Path = Path(__file__).with_name("protocol") / "command.json"
     memory_path: Path = Path(__file__).with_name("protocol") / "memory.json"
@@ -57,14 +43,11 @@ class BrainConfig:
 
 
 class BrainEngine:
-    """Ядро принятия решений `state -> command`."""
-
     def __init__(self, config: BrainConfig) -> None:
         self.config = config
         self._counter = 0
 
     def _new_command(self, action: str, state_id: str, reason: str) -> RobotCommand:
-        """Формирует команду с инкрементным id (параметры движения берутся из shared)."""
         self._counter += 1
         return RobotCommand(
             command_id=f"cmd_{self._counter:06d}",
@@ -74,7 +57,6 @@ class BrainEngine:
         )
 
     def _build_llm_prompt(self, state: RobotState) -> str:
-        """Формирует контекст состояния для LLM (sensor + metadata + recent_actions)."""
         payload: Dict[str, Any] = {
             "state_id": state.state_id,
             "sensor": state.sensor.to_dict(),
@@ -86,7 +68,6 @@ class BrainEngine:
 
     @staticmethod
     def _load_image_base64(image_path: Optional[str]) -> Optional[str]:
-        """Читает изображение и возвращает base64-строку или None."""
         if not image_path:
             return None
         path = Path(image_path)
@@ -149,13 +130,12 @@ Do not add markdown, comments, or extra keys.
 
 
     def _request_ollama(self, state: RobotState) -> Optional[Dict[str, Any]]:
-        """Делает запрос к Ollama (vision model) и возвращает JSON-ответ."""
         started_at = time.perf_counter()
 
         def elapsed_s() -> float:
             return time.perf_counter() - started_at
 
-        context = self._build_llm_prompt(state)  # includes recent_actions from memory
+        context = self._build_llm_prompt(state)
         images: List[str] = []
         image_b64 = self._load_image_base64(state.camera.image_path)
         if image_b64 is None and state.camera.image_path:
@@ -228,7 +208,6 @@ Do not add markdown, comments, or extra keys.
 
     @staticmethod
     def _normalize_llm_decision(payload: Dict[str, Any]) -> Optional[Tuple[str, str]]:
-        """Проверяет и нормализует решение LLM под контракт RobotCommand."""
         action = str(payload.get("action", "")).upper()
         if action not in ACTIONS:
             return None
@@ -236,7 +215,6 @@ Do not add markdown, comments, or extra keys.
         return action, reason
 
     def decide(self, state: Optional[RobotState]) -> RobotCommand:
-        """Основная стратегия принятия решения для нового state."""
         if state is None:
             return self._new_command("ERROR", "unknown", "state_missing")
         llm_raw = self._request_ollama(state)
@@ -252,7 +230,6 @@ Do not add markdown, comments, or extra keys.
 
 
 def run_brain_loop(config: BrainConfig, stop_event: Optional[threading.Event] = None) -> None:
-    """Цикл brain: обрабатывает только новый state_id."""
     stop_event = stop_event or threading.Event()
     engine = BrainEngine(config)
     LOGGER.info("Brain запущен. state=%s command=%s", config.state_path, config.command_path)

@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""Точка входа: orchestrator, который запускает все модули робота."""
 
 from __future__ import annotations
 
@@ -31,7 +29,6 @@ def monitor_health(
     stop_event: threading.Event,
     check_interval_s: float = 0.5,
 ) -> None:
-    """Пассивный монитор: проверяет наличие и корректность state/command."""
     LOGGER.info("Health monitor запущен")
     while not stop_event.is_set():
         state = read_json(state_path)
@@ -120,7 +117,6 @@ def main() -> None:
         while True:
             dead = [thread.name for thread in threads if not thread.is_alive()]
             if dead:
-                # Любой критический сбой приводит к аварийному завершению оркестратора.
                 LOGGER.error("Критические модули остановились: %s. Аварийная остановка.", ", ".join(dead))
                 break
             time.sleep(0.5)
@@ -130,7 +126,6 @@ def main() -> None:
         stop_event.set()
         for thread in threads:
             thread.join(timeout=3.0)
-        # При завершении системы сбрасываем runtime-файлы в нулевое состояние.
         atomic_write_json(state_path, zero_state_payload())
         atomic_write_json(command_path, zero_command_payload())
         atomic_write_json(memory_path, zero_memory_payload())

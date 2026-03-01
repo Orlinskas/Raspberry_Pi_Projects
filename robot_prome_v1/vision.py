@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""Модуль vision: читает датчики и публикует `protocol/state.json`."""
 
 from __future__ import annotations
 
@@ -36,7 +34,6 @@ STATE_PATH = Path(__file__).with_name("protocol") / "state.json"
 CAPTURE_DIR = Path(__file__).with_name("captures")
 COMMAND_PATH = Path(__file__).with_name("protocol") / "command.json"
 VISION_POLL_WAIT_S = 0.1
-# Дополнительная задержка после ACTION_DURATION_MS (робот стабилизируется, меньше размытия)
 VISION_EXTRA_DELAY_S = 1.0
 
 ECHO_PIN = 0
@@ -57,24 +54,21 @@ CAPTURE_KEEP_LAST = 30
 
 try:
     import RPi.GPIO as GPIO
-except ImportError:  # pragma: no cover
+except ImportError:
     GPIO = None
 
 try:
     import cv2
-except ImportError:  # pragma: no cover
+except ImportError:
     cv2 = None
 
-# Порт для MJPEG-потока камеры в браузере
 STREAM_DEFAULT_PORT = 8765
 
 
 class FrameBuffer:
-    """Потокобезопасный буфер последнего кадра с камеры для веб-стрима."""
-
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._frame: Optional[bytes] = None  # JPEG-байты
+        self._frame: Optional[bytes] = None
 
     def put(self, jpeg_bytes: bytes) -> None:
         with self._lock:
@@ -86,25 +80,19 @@ class FrameBuffer:
 
 
 class ProximitySensor(Protocol):
-    """Интерфейс датчика расстояния."""
-
     def read_distance_cm(self) -> float:
         ...
 
 
 class CameraDetector(Protocol):
-    """Интерфейс захвата изображения с камеры (без LLM)."""
-
     def read_image_path(self, state_id: str) -> Optional[str]:
-        """Захватывает кадр, сохраняет, возвращает путь к файлу или None."""
+        ...
 
     def close(self) -> None:
         ...
 
 
 class UltrasonicProximitySensor:
-    """Датчик HC-SR04: несколько замеров, отсечение выбросов, медиана, задержка 60 мс."""
-
     def __init__(self) -> None:
         self._initialized = False
         self._history: Deque[float] = deque(maxlen=5)
@@ -151,11 +139,9 @@ class UltrasonicProximitySensor:
         return None
 
     def _filter_outliers(self, samples: list[float]) -> list[float]:
-        """Отбрасывает замеры, сильно отличающиеся от медианы."""
         if len(samples) < 2:
             return samples
         med = statistics.median(samples)
-        # Для близких расстояний — абсолютный порог 5 см, для дальних — относительный
         threshold = max(5.0, med * ULTRASONIC_OUTLIER_RATIO)
         return [s for s in samples if abs(s - med) <= threshold]
 
@@ -183,8 +169,6 @@ class UltrasonicProximitySensor:
 
 
 class MockCameraDetector:
-    """Заглушка камеры: не подмешивает данные в решения brain."""
-
     def read_image_path(self, state_id: str) -> Optional[str]:
         _ = state_id
         return None
@@ -194,8 +178,6 @@ class MockCameraDetector:
 
 
 class OpenCVCameraDetector:
-    """One-shot захват изображения с USB-камеры (без LLM, только OpenCV)."""
-
     def __init__(
         self,
         capture_dir: Path,
@@ -248,7 +230,7 @@ class OpenCVCameraDetector:
         if not self._ensure_open():
             return None
 
-        assert self._cap is not None  # for type checkers
+        assert self._cap is not None
         ok, frame = self._cap.read()
         if not ok or frame is None:
             LOGGER.warning("Не удалось получить кадр из USB-камеры")
@@ -260,7 +242,6 @@ class OpenCVCameraDetector:
             LOGGER.warning("Не удалось сохранить кадр: %s", image_path)
             return None
 
-        # Обновляем буфер для веб-стрима (не блокирует работу робота)
         if self._frame_buffer is not None and cv2 is not None:
             _, jpeg = cv2.imencode(".jpg", frame)
             if jpeg is not None:
@@ -276,7 +257,6 @@ class OpenCVCameraDetector:
 
 
 def _get_local_ip() -> str:
-    """Возвращает локальный IP для отображения в инструкциях."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0)
@@ -289,8 +269,6 @@ def _get_local_ip() -> str:
 
 
 def _make_stream_handler(frame_buffer: FrameBuffer) -> type:
-    """Создаёт класс HTTP-обработчика с замыканием на frame_buffer."""
-
     class MJPEGStreamHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -351,7 +329,6 @@ def run_stream_server(
     frame_buffer: FrameBuffer,
     stop_event: threading.Event,
 ) -> None:
-    """Запускает HTTP-сервер MJPEG-потока в фоновом потоке (daemon)."""
     handler = _make_stream_handler(frame_buffer)
     server = _ThreadedHTTPServer(("0.0.0.0", port), handler)
 
@@ -376,8 +353,6 @@ def run_stream_server(
 
 @dataclass
 class VisionConfig:
-    """Конфигурация синхронного vision-цикла (захват кадра + ultrasonic, без LLM)."""
-
     capture_dir: Path = CAPTURE_DIR
     capture_keep_last: int = CAPTURE_KEEP_LAST
     stream_port: int = STREAM_DEFAULT_PORT
@@ -402,7 +377,6 @@ def build_sensors(
 
 
 def _clear_capture_images(capture_dir: Path) -> None:
-    """Очищает каталог снимков перед запуском vision."""
     if not capture_dir.exists():
         capture_dir.mkdir(parents=True, exist_ok=True)
         return
@@ -415,7 +389,7 @@ def _clear_capture_images(capture_dir: Path) -> None:
         try:
             path.unlink()
             deleted += 1
-        except OSError as exc:  # pragma: no cover
+        except OSError as exc:
             LOGGER.warning("Не удалось удалить старый снимок %s: %s", path, exc)
     if deleted:
         LOGGER.info("Очищен каталог снимков: удалено %s файлов", deleted)
@@ -426,7 +400,6 @@ def _wait_for_command_duration(
     last_processed_command_id: str,
     stop_event: threading.Event,
 ) -> Optional[str]:
-    """Ждёт новую команду, затем duration_ms по ACTION_DURATION_MS. Возвращает command_id или None при stop."""
     while not stop_event.is_set():
         raw = read_json(command_path)
         if not isinstance(raw, dict):
@@ -451,7 +424,6 @@ def _wait_for_command_duration(
 
 
 def _prune_capture_images(capture_dir: Path, keep_last: int) -> None:
-    """Хранит только последние keep_last снимков в каталоге."""
     keep_last = max(1, int(keep_last))
     files = [
         path
@@ -464,12 +436,11 @@ def _prune_capture_images(capture_dir: Path, keep_last: int) -> None:
     for old_path in files[keep_last:]:
         try:
             old_path.unlink()
-        except OSError as exc:  # pragma: no cover
+        except OSError as exc:
             LOGGER.warning("Не удалось удалить старый снимок %s: %s", old_path, exc)
 
 
 def _build_state(state_counter: int, proximity: ProximitySensor, camera: CameraDetector) -> RobotState:
-    """Формирует единый state из всех входов vision (захват кадра + ultrasonic)."""
     state_id = f"st_{state_counter:06d}"
 
     proximity_state = ProximityState()
@@ -479,12 +450,12 @@ def _build_state(state_counter: int, proximity: ProximitySensor, camera: CameraD
         image_path = camera.read_image_path(state_id)
         if image_path is not None:
             camera_state = CameraState(image_path=image_path)
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:
         LOGGER.error("Ошибка чтения камеры: %s", exc)
 
     try:
         proximity_state = ProximityState(obstacle_cm=proximity.read_distance_cm())
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:
         LOGGER.warning("Ошибка чтения датчика приближения: %s", exc)
 
     return RobotState(
@@ -495,19 +466,17 @@ def _build_state(state_counter: int, proximity: ProximitySensor, camera: CameraD
 
 
 def print_stream_instructions(port: int = STREAM_DEFAULT_PORT) -> None:
-    """Выводит в консоль инструкцию для подключения к видеопотоку."""
     ip = _get_local_ip()
     print()
     print("  " + "=" * 56)
-    print("  ВИДЕО ПОТОК КАМЕРЫ — откройте в браузере:")
+    print("  Camera Video Streem — open in browser:")
     print("  http://{}:{}".format(ip, port))
-    print("  (локально: http://127.0.0.1:{})".format(port))
+    print("  (localy: http://127.0.0.1:{})".format(port))
     print("  " + "=" * 56)
     print()
 
 
 def run_vision_loop(config: VisionConfig, stop_event: Optional[threading.Event] = None) -> None:
-    """Основной цикл vision: ждёт завершения команды -> capture -> ultrasonic -> state write."""
     stop_event = stop_event or threading.Event()
     _clear_capture_images(config.capture_dir)
 

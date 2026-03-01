@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""Общие модели и утилиты протокола для взаимодействия модулей робота.
-
-Этот файл содержит:
-- контракты `protocol/state.json` и `protocol/command.json`;
-- безопасный atomic-write JSON (без битых файлов при падении).
-"""
 
 from __future__ import annotations
 
@@ -30,7 +23,6 @@ ACTIONS = [
     "PLAY",
 ]
 
-# Параметры движений (все заранее заданы; command.json не содержит params)
 ACTION_DURATION_MS = {
     "STEP_FORWARD": 1000,
     "STEP_BACKWARD": 500,
@@ -38,8 +30,8 @@ ACTION_DURATION_MS = {
     "TURN_LEFT_45": 600,
     "TURN_RIGHT_15": 200,
     "TURN_RIGHT_45": 600,
-    "ERROR": 1000,  # время на 3 красных мигания (~0.9 с)
-    "PLAY": 3500,   # качание влево-вправо + разноцветное мигание
+    "ERROR": 1000,
+    "PLAY": 3500,
 }
 
 ACTION_SPEED = {
@@ -49,12 +41,11 @@ ACTION_SPEED = {
     "TURN_LEFT_45": 25,
     "TURN_RIGHT_15": 25,
     "TURN_RIGHT_45": 25,
-    "PLAY": 60,  # скорость поворотов при качании
+    "PLAY": 60,
 }
 
 
 def get_effective_duration_ms(action: str) -> int:
-    """Возвращает duration_ms для действия (0 для LIGHT_* и неизвестных)."""
     return ACTION_DURATION_MS.get(action, 0)
 
 
@@ -62,22 +53,11 @@ TURN_DURATION_MS = {k: v for k, v in ACTION_DURATION_MS.items() if k.startswith(
 TURN_SPEED = {k: v for k, v in ACTION_SPEED.items() if k.startswith("TURN_")}
 TURN_ACTIONS = frozenset(TURN_DURATION_MS.keys())
 
-GRID_EMPTY = "_"
-
-DEFAULT_GRID_5X5 = [
-    GRID_EMPTY * 5,
-    GRID_EMPTY * 5,
-    GRID_EMPTY * 2 + "R" + GRID_EMPTY * 2,
-    GRID_EMPTY * 5,
-    GRID_EMPTY * 5,
-]
-
 PathLike = Union[str, Path]
 GPIO_LOCK = threading.RLock()
 
 
 def zero_state_payload() -> Dict[str, Any]:
-    """Возвращает нулевое (стартовое) состояние робота."""
     return {
         "state_id": "st_000000",
         "sensor": {
@@ -89,7 +69,6 @@ def zero_state_payload() -> Dict[str, Any]:
     }
 
 def zero_command_payload() -> Dict[str, Any]:
-    """Возвращает нулевую команду (без движения)."""
     return {
         "command_id": "cmd_000000",
         "based_on_state_id": "st_000000",
@@ -99,12 +78,10 @@ def zero_command_payload() -> Dict[str, Any]:
 
 
 def zero_memory_payload() -> Dict[str, Any]:
-    """Возвращает пустое состояние памяти (action_history: [])."""
     return {"action_history": []}
 
 
 def atomic_write_json(path: PathLike, payload: Dict[str, Any]) -> None:
-    """Атомарно записывает JSON через временный файл + replace()."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -122,7 +99,6 @@ def atomic_write_json(path: PathLike, payload: Dict[str, Any]) -> None:
 
 
 def read_json(path: PathLike) -> Optional[Dict[str, Any]]:
-    """Безопасно читает JSON-объект; при ошибке возвращает None."""
     target = Path(path)
     if not target.exists():
         return None
@@ -138,8 +114,6 @@ def read_json(path: PathLike) -> Optional[Dict[str, Any]]:
 
 @dataclass
 class ProximityState:
-    """Состояние датчика приближения."""
-
     obstacle_cm: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -157,8 +131,6 @@ class ProximityState:
 
 @dataclass
 class CameraState:
-    """Состояние камеры: путь к захваченному изображению (OpenCV)."""
-
     image_path: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -174,8 +146,6 @@ class CameraState:
 
 @dataclass
 class RobotState:
-    """Полный снимок состояния робота (выход vision)."""
-
     state_id: str = ""
     sensor: ProximityState = field(default_factory=ProximityState)
     camera: CameraState = field(default_factory=CameraState)
@@ -200,10 +170,6 @@ class RobotState:
 
 @dataclass
 class RobotCommand:
-    """Команда управления роботом (выход brain, вход controller).
-    Параметры движения (speed, duration_ms) заданы в shared.ACTION_SPEED и ACTION_DURATION_MS.
-    """
-
     command_id: str = ""
     based_on_state_id: str = ""
     action: str = "LIGHT_OFF"

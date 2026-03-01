@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""Модуль controller: исполняет команды из `protocol/command.json` на моторах."""
 
 import argparse
 import logging
@@ -11,7 +9,7 @@ from typing import Optional, Union
 
 try:
     import RPi.GPIO as GPIO
-except ImportError:  # pragma: no cover
+except ImportError:
     class _MockPWM:
         def __init__(self, pin, freq):
             self.pin = pin
@@ -66,10 +64,8 @@ from shared import (
     read_json,
 )
 
-# GPIO-пины моторов (BCM)
 IN1, IN2, IN3, IN4 = 20, 21, 19, 26
 ENA, ENB = 16, 13
-# RGB LED (Yahboom Tank: ColorLED.py)
 LED_R, LED_G, LED_B = 22, 27, 24
 
 pwm_ena = None
@@ -79,7 +75,6 @@ _ACTION_UNTIL_TS = 0.0
 
 
 def setup():
-    """Инициализация GPIO и PWM."""
     global pwm_ena, pwm_enb
     with GPIO_LOCK:
         GPIO.setmode(GPIO.BCM)
@@ -138,7 +133,6 @@ def turn_right(speed: int = 30):
 
 
 def stop():
-    """Полная остановка моторов."""
     GPIO.output(IN1, GPIO.LOW)
     GPIO.output(IN2, GPIO.LOW)
     GPIO.output(IN3, GPIO.LOW)
@@ -150,21 +144,18 @@ def stop():
 
 
 def light_on():
-    """Включает RGB LED (белый: R+G+B)."""
     GPIO.output(LED_R, GPIO.HIGH)
     GPIO.output(LED_G, GPIO.HIGH)
     GPIO.output(LED_B, GPIO.HIGH)
 
 
 def light_off():
-    """Выключает RGB LED."""
     GPIO.output(LED_R, GPIO.LOW)
     GPIO.output(LED_G, GPIO.LOW)
     GPIO.output(LED_B, GPIO.LOW)
 
 
 def error_blink():
-    """Три раза быстро мигает красным (индикация ошибки)."""
     blink_on_s = 0.15
     blink_off_s = 0.15
     for _ in range(3):
@@ -178,26 +169,23 @@ def error_blink():
         time.sleep(blink_off_s)
 
 
-# RGB цвета для PLAY (R, G, B) — как в ColorLED.py
 _PLAY_COLORS = [
-    (GPIO.HIGH, GPIO.LOW, GPIO.LOW),   # красный
-    (GPIO.LOW, GPIO.HIGH, GPIO.LOW),   # зелёный
-    (GPIO.LOW, GPIO.LOW, GPIO.HIGH),   # синий
-    (GPIO.HIGH, GPIO.HIGH, GPIO.LOW),  # жёлтый
-    (GPIO.HIGH, GPIO.LOW, GPIO.HIGH),  # magenta
-    (GPIO.LOW, GPIO.HIGH, GPIO.HIGH),  # cyan
+    (GPIO.HIGH, GPIO.LOW, GPIO.LOW),
+    (GPIO.LOW, GPIO.HIGH, GPIO.LOW),
+    (GPIO.LOW, GPIO.LOW, GPIO.HIGH),
+    (GPIO.HIGH, GPIO.HIGH, GPIO.LOW),
+    (GPIO.HIGH, GPIO.LOW, GPIO.HIGH),
+    (GPIO.LOW, GPIO.HIGH, GPIO.HIGH),
 ]
 
 
 def _set_led_color(r: int, g: int, b: int) -> None:
-    """Устанавливает цвет RGB LED."""
     GPIO.output(LED_R, r)
     GPIO.output(LED_G, g)
     GPIO.output(LED_B, b)
 
 
 def play(phase_duration_s: float = 0.2, speed: int = 50, cycles: int = 6) -> None:
-    """Качание влево-вправо (TURN_LEFT_15/TURN_RIGHT_15) с разноцветным миганием LED."""
     for i in range(cycles):
         if i % 2 == 0:
             turn_left(speed=speed)
@@ -210,7 +198,6 @@ def play(phase_duration_s: float = 0.2, speed: int = 50, cycles: int = 6) -> Non
 
 
 def cleanup():
-    """Безопасная деинициализация GPIO."""
     global pwm_ena, pwm_enb
     with GPIO_LOCK:
         light_off()
@@ -225,9 +212,6 @@ def cleanup():
 
 
 def execute_command(command: RobotCommand) -> None:
-    """Маппинг action -> функция движения.
-    Все параметры (speed, duration_ms) заданы в shared.ACTION_SPEED и ACTION_DURATION_MS.
-    """
     global _ACTION_UNTIL_TS
 
     action = command.action
@@ -271,7 +255,6 @@ def execute_command(command: RobotCommand) -> None:
 
 
 def execute_command_dry_run(command: RobotCommand) -> None:
-    """Обрабатывает команду без движения моторов (для тестового режима)."""
     global _ACTION_UNTIL_TS
 
     action = command.action
@@ -291,7 +274,6 @@ def run_controller_loop(
     stop_event: Optional[threading.Event] = None,
     enable_motors: bool = True,
 ) -> None:
-    """Режим автомата: читает команду из файла и исполняет ее."""
     stop_event = stop_event or threading.Event()
     command_path = Path(command_path)
     last_command_id = ""
@@ -331,7 +313,6 @@ def run_controller_loop(
 
 
 def interactive_main():
-    """Ручной режим для отладки по клавишам."""
     setup()
     print("Controller started.")
     print("Commands: W - forward, S - backward, A - left, D - right, C - stop, L - light on, O - light off, E - error blink, P - play, Q - quit")

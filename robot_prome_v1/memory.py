@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""Модуль memory: следит за command.json и записывает историю в memory.json."""
 
 from __future__ import annotations
 
@@ -20,8 +18,6 @@ MEMORY_MAX_ENTRIES = 10
 
 @dataclass
 class MemoryConfig:
-    """Настройки модуля памяти."""
-
     state_path: Path = Path(__file__).with_name("protocol") / "state.json"
     command_path: Path = Path(__file__).with_name("protocol") / "command.json"
     memory_path: Path = Path(__file__).with_name("protocol") / "memory.json"
@@ -29,7 +25,6 @@ class MemoryConfig:
 
 
 def _ensure_memory_file(memory_path: Path) -> None:
-    """Создаёт memory.json с пустым action_history, если файла нет."""
     if memory_path.exists():
         return
     atomic_write_json(memory_path, zero_memory_payload())
@@ -37,7 +32,6 @@ def _ensure_memory_file(memory_path: Path) -> None:
 
 
 def _read_memory(memory_path: Path) -> Dict[str, Any]:
-    """Читает memory.json, возвращает валидный payload."""
     raw = read_json(memory_path)
     if not isinstance(raw, dict):
         return zero_memory_payload()
@@ -52,7 +46,6 @@ def _append_entry(
     entry: Dict[str, Any],
     max_entries: int,
 ) -> None:
-    """Добавляет запись в memory, обрезает до max_entries."""
     data = _read_memory(memory_path)
     history: List[Dict[str, Any]] = list(data["action_history"])
     history.append(entry)
@@ -64,7 +57,6 @@ def _append_entry(
 
 
 def run_memory_loop(config: MemoryConfig, stop_event: Optional[threading.Event] = None) -> None:
-    """Цикл memory: следит за command_id, при новой команде дописывает в memory.json."""
     stop_event = stop_event or threading.Event()
     _ensure_memory_file(config.memory_path)
 
@@ -82,7 +74,6 @@ def run_memory_loop(config: MemoryConfig, stop_event: Optional[threading.Event] 
             stop_event.wait(POLL_WAIT_S)
             continue
 
-        # Новая команда — читаем state и формируем запись
         raw_state = read_json(config.state_path)
         obstacle_cm = None
         if isinstance(raw_state, dict):
@@ -111,7 +102,6 @@ def run_memory_loop(config: MemoryConfig, stop_event: Optional[threading.Event] 
 
 
 def get_recent_actions(memory_path: Path, limit: int = 8) -> List[Dict[str, Any]]:
-    """Возвращает последние limit записей из memory (для brain)."""
     data = _read_memory(memory_path)
     history = data.get("action_history", [])
     if not isinstance(history, list):
