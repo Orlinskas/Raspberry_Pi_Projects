@@ -13,7 +13,6 @@ import logging
 import threading
 import time
 from pathlib import Path
-
 from brain import BrainConfig, run_brain_loop
 from controller import run_controller_loop
 from memory import MemoryConfig, run_memory_loop

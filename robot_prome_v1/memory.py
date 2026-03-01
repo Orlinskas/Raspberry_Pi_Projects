@@ -12,7 +12,6 @@ import logging
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
 from settings import (
     MEMORY_POLL_WAIT_S,
     MemoryConfig,

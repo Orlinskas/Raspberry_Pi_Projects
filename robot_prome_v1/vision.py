@@ -10,13 +10,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import socket
 import statistics
 import threading
 import time
-import urllib.error
-import urllib.request
 from collections import deque
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
@@ -29,7 +26,6 @@ from settings import (
     CAMERA_INDEX,
     CAMERA_WARMUP_S,
     CAMERA_WIDTH,
-    CAPTURE_DIR,
     CAPTURE_KEEP_LAST,
     ECHO_PIN,
     GPIO_LOCK,
