@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# ---------------------------------------------------------------------------
+# Author:   Vlad Orlinskas
+# Site:     https://prometeriy.com
+# Project:  robot_prome_v1 — LLM-driven autonomous robot experiment
+# License:  Free for any use
+# ---------------------------------------------------------------------------
 
 from __future__ import annotations
 
