@@ -30,6 +30,8 @@ from settings import (
     ECHO_PIN,
     GPIO_LOCK,
     STREAM_DEFAULT_PORT,
+    STREAM_FPS,
+    STREAM_JPEG_QUALITY,
     TRIG_PIN,
     ULTRASONIC_INTER_MEASURE_DELAY_S,
     ULTRASONIC_MAX_CM,
@@ -73,6 +75,79 @@ class FrameBuffer:
     def get(self) -> Optional[bytes]:
         with self._lock:
             return self._frame if self._frame is not None else None
+
+
+class StreamCapture:
+    """Continuously captures frames in background for low-latency MJPEG stream."""
+
+    def __init__(
+        self,
+        frame_buffer: FrameBuffer,
+        camera_index: int = CAMERA_INDEX,
+        width: int = CAMERA_WIDTH,
+        height: int = CAMERA_HEIGHT,
+        capture_fps: float = CAMERA_FPS,
+        stream_fps: float = STREAM_FPS,
+        jpeg_quality: int = STREAM_JPEG_QUALITY,
+    ) -> None:
+        self._frame_buffer = frame_buffer
+        self._camera_index = camera_index
+        self._width = width
+        self._height = height
+        self._capture_fps = capture_fps
+        self._stream_fps = stream_fps
+        self._jpeg_quality = max(50, min(95, jpeg_quality))
+        self._interval = 1.0 / max(1.0, stream_fps)
+        self._cap: Optional[Any] = None
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._raw_lock = threading.Lock()
+        self._last_raw: Optional[Any] = None
+        self._encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), self._jpeg_quality] if cv2 else []
+
+    def _capture_loop(self) -> None:
+        if cv2 is None or not self._cap:
+            return
+        while not self._stop.is_set():
+            ok, frame = self._cap.read()
+            if ok and frame is not None:
+                with self._raw_lock:
+                    self._last_raw = frame.copy()
+                _, jpeg = cv2.imencode(".jpg", frame, self._encode_params)
+                if jpeg is not None:
+                    self._frame_buffer.put(jpeg.tobytes())
+            self._stop.wait(self._interval)
+
+    def start(self) -> bool:
+        if cv2 is None:
+            return False
+        self._cap = cv2.VideoCapture(self._camera_index)
+        if not self._cap.isOpened():
+            self._cap.release()
+            self._cap = None
+            return False
+        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(self._width))
+        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self._height))
+        self._cap.set(cv2.CAP_PROP_FPS, float(self._capture_fps))
+        self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc("M", "J", "P", "G"))
+        time.sleep(CAMERA_WARMUP_S)
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._capture_loop, name="stream-capture", daemon=True)
+        self._thread.start()
+        return True
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+        if self._cap:
+            self._cap.release()
+            self._cap = None
+
+    def get_latest_raw(self) -> Optional[Any]:
+        with self._raw_lock:
+            return self._last_raw.copy() if self._last_raw is not None else None
 
 
 class ProximitySensor(Protocol):
@@ -192,6 +267,8 @@ class OpenCVCameraDetector:
         self._fps = fps
         self._keep_last = max(1, int(keep_last))
         self._cap = None
+        self._stream_capture: Optional[StreamCapture] = None
+        self._stream_capture_failed = False
         self._open_warning_logged = False
 
     def _ensure_open(self) -> bool:
@@ -200,6 +277,29 @@ class OpenCVCameraDetector:
                 LOGGER.warning("OpenCV unavailable, camera disabled")
                 self._open_warning_logged = True
             return False
+
+        if self._frame_buffer is not None and self._stream_capture is None and not self._stream_capture_failed:
+            self._stream_capture = StreamCapture(
+                frame_buffer=self._frame_buffer,
+                camera_index=self._camera_index,
+                width=self._width,
+                height=self._height,
+                capture_fps=CAMERA_FPS,
+                stream_fps=STREAM_FPS,
+                jpeg_quality=STREAM_JPEG_QUALITY,
+            )
+            if not self._stream_capture.start():
+                LOGGER.warning(
+                    "Stream capture failed (camera index=%s), falling back to on-demand capture",
+                    self._camera_index,
+                )
+                self._stream_capture = None
+                self._stream_capture_failed = True
+            else:
+                LOGGER.info("Stream capture started at %.0f fps", STREAM_FPS)
+
+        if self._stream_capture is not None:
+            return True
 
         if self._cap is not None and self._cap.isOpened():
             return True
@@ -226,11 +326,27 @@ class OpenCVCameraDetector:
         if not self._ensure_open():
             return None
 
-        assert self._cap is not None
-        ok, frame = self._cap.read()
-        if not ok or frame is None:
-            LOGGER.warning("USB camera frame read failed")
+        if self._stream_capture is not None:
+            for _ in range(int(STREAM_FPS * 1.5)):
+                frame = self._stream_capture.get_latest_raw()
+                if frame is not None:
+                    break
+                time.sleep(1.0 / max(1.0, STREAM_FPS))
+        else:
+            assert self._cap is not None
+            ok, frame = self._cap.read()
+            if not ok or frame is None:
+                LOGGER.warning("USB camera frame read failed")
+                return None
+
+        if frame is None:
+            LOGGER.warning("No frame available from stream capture")
             return None
+
+        if self._frame_buffer is not None and self._stream_capture is None:
+            _, jpeg = cv2.imencode(".jpg", frame)
+            if jpeg is not None:
+                self._frame_buffer.put(jpeg.tobytes())
 
         self._capture_dir.mkdir(parents=True, exist_ok=True)
         image_path = self._capture_dir / f"{state_id}.jpg"
@@ -238,15 +354,18 @@ class OpenCVCameraDetector:
             LOGGER.warning("Frame save failed: %s", image_path)
             return None
 
-        if self._frame_buffer is not None and cv2 is not None:
-            _, jpeg = cv2.imencode(".jpg", frame)
-            if jpeg is not None:
-                self._frame_buffer.put(jpeg.tobytes())
-
         _prune_capture_images(self._capture_dir, keep_last=self._keep_last)
         return str(image_path.resolve())
 
+    def start_stream_if_enabled(self) -> None:
+        """Start continuous capture for stream (call early so browser sees video ASAP)."""
+        if self._frame_buffer is not None:
+            self._ensure_open()
+
     def close(self) -> None:
+        if self._stream_capture is not None:
+            self._stream_capture.stop()
+            self._stream_capture = None
         if self._cap is not None:
             self._cap.release()
             self._cap = None
@@ -311,7 +430,7 @@ def _make_stream_handler(frame_buffer: FrameBuffer) -> type:
                         self.wfile.write(b"\r\n")
                     except (BrokenPipeError, ConnectionResetError):
                         break
-                time.sleep(0.1)
+                time.sleep(1.0 / max(1.0, STREAM_FPS))
 
     return MJPEGStreamHandler
 
@@ -474,6 +593,8 @@ def run_vision_loop(config: VisionConfig, stop_event: Optional[threading.Event] 
         print_stream_instructions(config.stream_port)
 
     proximity, camera = build_sensors(config, frame_buffer=frame_buffer)
+    if hasattr(camera, "start_stream_if_enabled"):
+        camera.start_stream_if_enabled()
     counter = 0
     LOGGER.info("Vision started state_path=%s", config.state_path)
 

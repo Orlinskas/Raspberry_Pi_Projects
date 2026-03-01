@@ -293,7 +293,7 @@ class BrainConfig:
     state_path: Path = STATE_PATH
     command_path: Path = COMMAND_PATH
     memory_path: Path = MEMORY_PATH
-    ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://192.168.0.18:11434")
+    ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
     ollama_model: str = os.getenv("OLLAMA_BRAIN_MODEL", "qwen3.5:397b-cloud")
     ollama_timeout_s: float = float(os.getenv("OLLAMA_TIMEOUT_S", "100"))
     llm_temperature: float = 0.1
@@ -328,6 +328,8 @@ CAMERA_WARMUP_S = 1.0
 CAPTURE_KEEP_LAST = 30
 
 STREAM_DEFAULT_PORT = 8765
+STREAM_FPS = float(os.getenv("STREAM_FPS", "30"))  # 15-20 reasonable for Pi
+STREAM_JPEG_QUALITY = int(os.getenv("STREAM_JPEG_QUALITY", "100"))  # 70-95, lower = faster
 
 
 @dataclass
