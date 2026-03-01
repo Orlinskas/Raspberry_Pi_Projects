@@ -145,7 +145,7 @@ Do not add markdown, comments, or extra keys.
         images: List[str] = []
         image_b64 = self._load_image_base64(state.camera.image_path)
         if image_b64 is None and state.camera.image_path:
-            LOGGER.warning("Brain: image_path=%r but failed to load", state.camera.image_path)
+            LOGGER.warning("Brain: image load failed path=%r", state.camera.image_path)
         if image_b64 is not None:
             images.append(image_b64)
             user_content = "Analyze this image and decide the robot action. Context: " + context
@@ -177,39 +177,39 @@ Do not add markdown, comments, or extra keys.
             with urllib.request.urlopen(req, timeout=self.config.ollama_timeout_s) as response:
                 raw = response.read().decode("utf-8", errors="replace")
             if self.config.log_llm_verbose:
-                LOGGER.info("Brain LLM raw response: %s", raw)
+                LOGGER.info("Brain LLM raw: %s", raw)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            LOGGER.warning("Ollama request failed in %.3f s: %s", elapsed_s(), exc)
+            LOGGER.warning("Ollama request failed %.3fs: %s", elapsed_s(), exc)
             return None
 
         try:
             decoded = json.loads(raw)
         except json.JSONDecodeError:
-            LOGGER.warning("Ollama returned non-JSON payload in %.3f s", elapsed_s())
+            LOGGER.warning("Ollama non-JSON response %.3fs", elapsed_s())
             return None
         if not isinstance(decoded, dict):
-            LOGGER.warning("Ollama payload is not an object (%.3f s)", elapsed_s())
+            LOGGER.warning("Ollama payload not object %.3fs", elapsed_s())
             return None
 
         message = decoded.get("message", {})
         if not isinstance(message, dict):
-            LOGGER.warning("Ollama message field is invalid (%.3f s)", elapsed_s())
+            LOGGER.warning("Ollama message invalid %.3fs", elapsed_s())
             return None
         content = message.get("content")
         if not isinstance(content, str):
-            LOGGER.warning("Ollama content is missing (%.3f s)", elapsed_s())
+            LOGGER.warning("Ollama content missing %.3fs", elapsed_s())
             return None
 
         try:
             decision = json.loads(content)
         except json.JSONDecodeError:
-            LOGGER.warning("LLM content is not a valid JSON decision (%.3f s)", elapsed_s())
+            LOGGER.warning("LLM invalid JSON %.3fs", elapsed_s())
             return None
 
         if not isinstance(decision, dict):
-            LOGGER.warning("LLM decision is not an object (%.3f s)", elapsed_s())
+            LOGGER.warning("LLM decision not object %.3fs", elapsed_s())
             return None
-        LOGGER.info("Ollama response time: %.3f s (model=%s)", elapsed_s(), self.config.ollama_model)
+        LOGGER.info("Ollama %.3fs model=%s", elapsed_s(), self.config.ollama_model)
         return decision
 
     @staticmethod
@@ -238,7 +238,7 @@ Do not add markdown, comments, or extra keys.
 def run_brain_loop(config: BrainConfig, stop_event: Optional[threading.Event] = None) -> None:
     stop_event = stop_event or threading.Event()
     engine = BrainEngine(config)
-    LOGGER.info("Brain запущен. state=%s command=%s", config.state_path, config.command_path)
+    LOGGER.info("Brain started state=%s command=%s", config.state_path, config.command_path)
     last_state_id = ""
 
     while not stop_event.is_set():
@@ -256,14 +256,14 @@ def run_brain_loop(config: BrainConfig, stop_event: Optional[threading.Event] = 
             stop_event.wait(POLL_WAIT_S)
             continue
 
-        LOGGER.info("Brain: deciding for state_id=%s (calling Ollama)", state.state_id)
+        LOGGER.info("Brain deciding state_id=%s", state.state_id)
         command = engine.decide(state)
         command_payload = command.to_dict()
         atomic_write_json(config.command_path, command_payload)
         LOGGER.info("COMMAND generated:\n%s", _json_line(command_payload))
         last_state_id = state.state_id
 
-    LOGGER.info("Brain остановлен")
+    LOGGER.info("Brain stopped")
 
 
 def parse_args() -> BrainConfig:
@@ -297,7 +297,7 @@ def main() -> None:
     try:
         run_brain_loop(config)
     except KeyboardInterrupt:
-        LOGGER.info("Brain остановлен пользователем")
+        LOGGER.info("Brain stopped by user")
 
 
 if __name__ == "__main__":

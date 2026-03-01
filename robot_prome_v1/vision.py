@@ -207,7 +207,7 @@ class OpenCVCameraDetector:
     def _ensure_open(self) -> bool:
         if cv2 is None:
             if not self._open_warning_logged:
-                LOGGER.warning("OpenCV (cv2) недоступен, камера отключена")
+                LOGGER.warning("OpenCV unavailable, camera disabled")
                 self._open_warning_logged = True
             return False
 
@@ -219,7 +219,7 @@ class OpenCVCameraDetector:
         if not cap.isOpened():
             cap.release()
             if not self._open_warning_logged:
-                LOGGER.warning("Не удалось открыть USB-камеру index=%s", self._camera_index)
+                LOGGER.warning("USB camera open failed index=%s", self._camera_index)
                 self._open_warning_logged = True
             return False
 
@@ -239,13 +239,13 @@ class OpenCVCameraDetector:
         assert self._cap is not None
         ok, frame = self._cap.read()
         if not ok or frame is None:
-            LOGGER.warning("Не удалось получить кадр из USB-камеры")
+            LOGGER.warning("USB camera frame read failed")
             return None
 
         self._capture_dir.mkdir(parents=True, exist_ok=True)
         image_path = self._capture_dir / f"{state_id}.jpg"
         if not cv2.imwrite(str(image_path), frame):
-            LOGGER.warning("Не удалось сохранить кадр: %s", image_path)
+            LOGGER.warning("Frame save failed: %s", image_path)
             return None
 
         if self._frame_buffer is not None and cv2 is not None:
@@ -371,7 +371,7 @@ def build_sensors(
     frame_buffer: Optional[FrameBuffer] = None,
 ) -> Tuple[ProximitySensor, CameraDetector]:
     if cv2 is None:
-        LOGGER.error("cv2 не найден, используется MockCameraDetector")
+        LOGGER.error("cv2 not found, using MockCameraDetector")
         camera: CameraDetector = MockCameraDetector()
     else:
         camera = OpenCVCameraDetector(
@@ -396,9 +396,9 @@ def _clear_capture_images(capture_dir: Path) -> None:
             path.unlink()
             deleted += 1
         except OSError as exc:
-            LOGGER.warning("Не удалось удалить старый снимок %s: %s", path, exc)
+            LOGGER.warning("Delete failed %s: %s", path, exc)
     if deleted:
-        LOGGER.info("Очищен каталог снимков: удалено %s файлов", deleted)
+        LOGGER.info("Cleaned captures: %s files removed", deleted)
 
 
 def _wait_for_command_duration(
@@ -421,7 +421,7 @@ def _wait_for_command_duration(
         action = str(raw.get("action", "LIGHT_OFF"))
         duration_ms = get_effective_duration_ms(action)
         duration_s = duration_ms / 1000.0 + VISION_EXTRA_DELAY_S
-        LOGGER.info("Vision: new command %s (%s), waiting %.2fs", command_id, action, duration_s)
+        LOGGER.info("Vision: cmd %s (%s), wait %.2fs", command_id, action, duration_s)
         deadline = time.monotonic() + duration_s
         while time.monotonic() < deadline and not stop_event.is_set():
             stop_event.wait(min(VISION_POLL_WAIT_S, max(0, deadline - time.monotonic())))
@@ -443,7 +443,7 @@ def _prune_capture_images(capture_dir: Path, keep_last: int) -> None:
         try:
             old_path.unlink()
         except OSError as exc:
-            LOGGER.warning("Не удалось удалить старый снимок %s: %s", old_path, exc)
+            LOGGER.warning("Delete failed %s: %s", old_path, exc)
 
 
 def _build_state(state_counter: int, proximity: ProximitySensor, camera: CameraDetector) -> RobotState:
@@ -457,12 +457,12 @@ def _build_state(state_counter: int, proximity: ProximitySensor, camera: CameraD
         if image_path is not None:
             camera_state = CameraState(image_path=image_path)
     except Exception as exc:
-        LOGGER.error("Ошибка чтения камеры: %s", exc)
+        LOGGER.error("Camera read error: %s", exc)
 
     try:
         proximity_state = ProximityState(obstacle_cm=proximity.read_distance_cm())
     except Exception as exc:
-        LOGGER.warning("Ошибка чтения датчика приближения: %s", exc)
+        LOGGER.warning("Proximity sensor error: %s", exc)
 
     return RobotState(
         state_id=state_id,
@@ -475,9 +475,9 @@ def print_stream_instructions(port: int = STREAM_DEFAULT_PORT) -> None:
     ip = _get_local_ip()
     print()
     print("  " + "=" * 56)
-    print("  Camera Video Streem — open in browser:")
+    print("  Camera stream — open in browser:")
     print("  http://{}:{}".format(ip, port))
-    print("  (localy: http://127.0.0.1:{})".format(port))
+    print("  (local: http://127.0.0.1:{})".format(port))
     print("  " + "=" * 56)
     print()
 
@@ -494,7 +494,7 @@ def run_vision_loop(config: VisionConfig, stop_event: Optional[threading.Event] 
 
     proximity, camera = build_sensors(config, frame_buffer=frame_buffer)
     counter = 0
-    LOGGER.info("Vision запущен. state_path=%s (ждёт duration по ACTION_DURATION_MS)", STATE_PATH)
+    LOGGER.info("Vision started state_path=%s", STATE_PATH)
 
     last_processed_command_id = ""
     try:
@@ -514,7 +514,7 @@ def run_vision_loop(config: VisionConfig, stop_event: Optional[threading.Event] 
             LOGGER.info("STATE written:\n%s", json.dumps(state_payload, ensure_ascii=False, indent=2, sort_keys=True))
     finally:
         camera.close()
-        LOGGER.info("Vision остановлен")
+        LOGGER.info("Vision stopped")
 
 
 def parse_args() -> VisionConfig:
@@ -538,7 +538,7 @@ def main() -> None:
     try:
         run_vision_loop(config)
     except KeyboardInterrupt:
-        LOGGER.info("Vision остановлен пользователем")
+        LOGGER.info("Vision stopped by user")
 
 
 if __name__ == "__main__":

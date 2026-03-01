@@ -251,13 +251,9 @@ def execute_command(command: RobotCommand) -> None:
 
     _ACTION_UNTIL_TS = time.time() + (duration_ms / 1000.0) if duration_ms > 0 else 0.0
 
-    LOGGER.debug(
-        "Исполнена команда id=%s action=%s reason=%s speed=%s",
-        command.command_id,
-        action,
-        command.reason,
-        speed if action in ACTION_SPEED else "—",
-    )
+    LOGGER.debug("Executed id=%s action=%s reason=%s speed=%s",
+        command.command_id, action, command.reason,
+        speed if action in ACTION_SPEED else "-")
 
 
 def execute_command_dry_run(command: RobotCommand) -> None:
@@ -267,12 +263,8 @@ def execute_command_dry_run(command: RobotCommand) -> None:
     duration_ms = ACTION_DURATION_MS.get(action, 0)
     _ACTION_UNTIL_TS = time.time() + (duration_ms / 1000.0) if duration_ms > 0 else 0.0
 
-    LOGGER.debug(
-        "DRY команда id=%s action=%s reason=%s",
-        command.command_id,
-        action,
-        command.reason,
-    )
+    LOGGER.debug("DRY id=%s action=%s reason=%s",
+        command.command_id, action, command.reason)
 
 def run_controller_loop(
     command_path: Union[Path, str] = Path(__file__).with_name("protocol") / "command.json",
@@ -286,9 +278,9 @@ def run_controller_loop(
 
     if enable_motors:
         setup()
-        LOGGER.info("Controller запущен. command_path=%s", command_path)
+        LOGGER.info("Controller started command_path=%s", command_path)
     else:
-        LOGGER.info("Controller запущен в DRY режиме. command_path=%s", command_path)
+        LOGGER.info("Controller started DRY command_path=%s", command_path)
 
     global _ACTION_UNTIL_TS
     try:
@@ -315,13 +307,13 @@ def run_controller_loop(
     finally:
         if enable_motors:
             cleanup()
-        LOGGER.info("Controller остановлен")
+        LOGGER.info("Controller stopped")
 
 
 def interactive_main():
     setup()
     print("Controller started.")
-    print("Commands: W - forward, S - backward, A - left, D - right, C - stop, L - light on, O - light off, E - error blink, P - play, Q - quit")
+    print("W fwd S back A left D right C stop L/O light E error P play Q quit")
 
     try:
         while True:
@@ -329,16 +321,16 @@ def interactive_main():
 
             if command == "W":
                 forward()
-                print("Moving forward")
+                print("Fwd")
             elif command == "S":
                 backward()
-                print("Moving backward")
+                print("Back")
             elif command == "A":
                 turn_left()
-                print("Turning left")
+                print("Left")
             elif command == "D":
                 turn_right()
-                print("Turning right")
+                print("Right")
             elif command in ("C", "С"):
                 stop()
                 print("Stop")
@@ -352,7 +344,7 @@ def interactive_main():
                 stop()
                 error_blink()
                 light_off()
-                print("Error blink")
+                print("Error")
             elif command == "P":
                 stop()
                 play()
@@ -360,7 +352,7 @@ def interactive_main():
             elif command == "Q":
                 break
             else:
-                print("Unknown command. Use W/S/A/D/C/L/O/E/P/Q")
+                print("Unknown, use W/S/A/D/C/L/O/E/P/Q")
     except KeyboardInterrupt:
         pass
     finally:

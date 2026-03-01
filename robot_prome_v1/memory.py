@@ -34,7 +34,7 @@ def _ensure_memory_file(memory_path: Path) -> None:
     if memory_path.exists():
         return
     atomic_write_json(memory_path, zero_memory_payload())
-    LOGGER.info("Создан пустой memory.json")
+    LOGGER.info("Created empty memory.json")
 
 
 def _read_memory(memory_path: Path) -> Dict[str, Any]:
@@ -59,7 +59,7 @@ def _append_entry(
         history = history[-max_entries:]
     data["action_history"] = history
     atomic_write_json(memory_path, data)
-    LOGGER.debug("Добавлена запись в memory: %s", entry.get("command_id"))
+    LOGGER.debug("Memory entry added: %s", entry.get("command_id"))
 
 
 def run_memory_loop(config: MemoryConfig, stop_event: Optional[threading.Event] = None) -> None:
@@ -67,7 +67,7 @@ def run_memory_loop(config: MemoryConfig, stop_event: Optional[threading.Event] 
     _ensure_memory_file(config.memory_path)
 
     last_command_id = ""
-    LOGGER.info("Memory запущен. command=%s memory=%s", config.command_path, config.memory_path)
+    LOGGER.info("Memory started command=%s memory=%s", config.command_path, config.memory_path)
 
     while not stop_event.is_set():
         raw_command = read_json(config.command_path)
@@ -104,7 +104,7 @@ def run_memory_loop(config: MemoryConfig, stop_event: Optional[threading.Event] 
         _append_entry(config.memory_path, entry, config.max_entries)
         last_command_id = command_id
 
-    LOGGER.info("Memory остановлен")
+    LOGGER.info("Memory stopped")
 
 
 def get_recent_actions(memory_path: Path, limit: int = 8) -> List[Dict[str, Any]]:
@@ -137,7 +137,7 @@ def main() -> None:
     try:
         run_memory_loop(config)
     except KeyboardInterrupt:
-        LOGGER.info("Memory остановлен пользователем")
+        LOGGER.info("Memory stopped by user")
 
 
 if __name__ == "__main__":

@@ -35,18 +35,18 @@ def monitor_health(
     stop_event: threading.Event,
     check_interval_s: float = 0.5,
 ) -> None:
-    LOGGER.info("Health monitor запущен")
+    LOGGER.info("Health monitor started")
     while not stop_event.is_set():
         state = read_json(state_path)
         command = read_json(command_path)
 
         if not isinstance(state, dict):
-            LOGGER.warning("state.json отсутствует или поврежден")
+            LOGGER.warning("state.json missing or corrupted")
         if not isinstance(command, dict):
-            LOGGER.warning("command.json отсутствует или поврежден")
+            LOGGER.warning("command.json missing or corrupted")
 
         stop_event.wait(check_interval_s)
-    LOGGER.info("Health monitor остановлен")
+    LOGGER.info("Health monitor stopped")
 
 
 def parse_args():
@@ -67,7 +67,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     args = parse_args()
     if args.mode == "dry":
-        LOGGER.info("Включен тестовый режим: движение робота отключено (DRY controller)")
+        LOGGER.info("DRY mode: motors disabled")
 
     protocol_dir = Path(__file__).with_name("protocol")
     protocol_dir.mkdir(parents=True, exist_ok=True)
@@ -117,17 +117,17 @@ def main() -> None:
 
     for thread in threads:
         thread.start()
-        LOGGER.info("Запущен поток: %s", thread.name)
+        LOGGER.info("Started thread: %s", thread.name)
 
     try:
         while True:
             dead = [thread.name for thread in threads if not thread.is_alive()]
             if dead:
-                LOGGER.error("Критические модули остановились: %s. Аварийная остановка.", ", ".join(dead))
+                LOGGER.error("Critical modules dead: %s. Shutting down.", ", ".join(dead))
                 break
             time.sleep(0.5)
     except KeyboardInterrupt:
-        LOGGER.info("Остановка пользователем")
+        LOGGER.info("Stopped by user")
     finally:
         stop_event.set()
         for thread in threads:
@@ -135,8 +135,8 @@ def main() -> None:
         atomic_write_json(state_path, zero_state_payload())
         atomic_write_json(command_path, zero_command_payload())
         atomic_write_json(memory_path, zero_memory_payload())
-        LOGGER.info("state.json, command.json, memory.json сброшены")
-        LOGGER.info("Main orchestrator остановлен")
+        LOGGER.info("Protocol files reset")
+        LOGGER.info("Main orchestrator stopped")
 
 
 if __name__ == "__main__":
