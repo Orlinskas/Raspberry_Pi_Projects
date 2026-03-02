@@ -1,6 +1,10 @@
 # robot_prome_v1
 
-**English** | [Русский](README_RU.md)
+*Autonomous robot powered by LLM — no scripts, only AI*
+
+**English** · [Русский](README_RU.md)
+
+---
 
 | | |
 |---|---|
@@ -9,29 +13,45 @@
 | **Goal** | Experiment: autonomous robot powered by LLM |
 | **License** | Free to use |
 
-Robot project for experiments:
-1. Is AI (LLM) powerful enough to bring a robot to life (no pre-scripted behavior at all). Movement, spatial orientation, task execution (Status: Success with caveats)
-2. Will AI (LLM) obey unethical commands like "find and kill a person" (Status: available in article https://prometeriy.com )
+## About
 
-The project was deliberately simplified for quick theory check. The robot is very slow due to generative model limitations. 
-Running a local LLM is almost impossible—not enough power on Raspberry Pi or MacBook. 
-Only very large models with "Thinking" capability can handle the task. Therefore the project uses a cloud model via Ollama.
+Robot project for experiments:
+
+1. **Is AI (LLM) powerful enough** to bring a robot to life *(no pre-scripted behavior at all)* — movement, spatial orientation, task execution  
+   → *Status: Success with caveats*
+
+2. **Will AI (LLM) obey unethical commands** like *"find and kill a person"*  
+   → *Status: available in [article](https://prometeriy.com)*
+
+> The project was deliberately simplified for quick theory check. The robot is very slow due to generative model limitations.
+
+- Running a local LLM is almost impossible — not enough power on Raspberry Pi or MacBook
+- Only very large models with **"Thinking"** capability can handle the task
+- Therefore the project uses a **cloud model via Ollama**
+
+---
+
+## Architecture
 
 The robot concept and architecture are simple:
-1. We give the robot "senses" using a forward-facing camera and proximity sensor.
-2. The robot's brain—AI (LLM)—makes decisions based on this data and outputs commands.
-3. The robot's memory is updated and the cycle repeats.
 
-Communication between LLM input and output uses JSON files. 
-Commands are actions like MOVE_FORWARD, TURN_LEFT, etc. 
-The physical appearance of the robot does not matter for this project—just change `settings.json`. 
-The architecture is well suited for any kind of extension.
+| Step | Description |
+|----|-------------|
+| 1️ | We give the robot **"senses"** — forward-facing camera and proximity sensor |
+| 2️ | The robot's **brain** (AI/LLM) makes decisions and outputs commands |
+| 3️ | The robot's **memory** is updated and the cycle repeats |
 
-Surprisingly, the robot does come to life. It could be a fun toy if the project is improved. 
-For example, voice interaction fits perfectly into this architecture. The robot could listen and speak back or comment. 
-But be prepared for very slow operation. Sometimes response generation can take up to 40 seconds (5–10 seconds on average). 
-During that time the robot will just stand still, since the main goal was to test LLM capabilities without scripts or classical robotics.
+- Communication between LLM input and output uses **JSON files**
+- Commands are actions like `MOVE_FORWARD`, `TURN_LEFT`, etc.
+- Physical appearance of the robot does not matter — just change `settings.json`
+- The architecture is well suited for **any kind of extension**
 
+> **Surprisingly, the robot does come to life.** It could be a fun toy if the project is improved. 
+> Voice interaction fits perfectly into this architecture. The robot could listen and speak back or comment.
+>
+> ⚠️ **Be prepared for slow operation** — response generation can take up to 40 seconds (5–10 sec average). The robot will stand still during that time.
+
+---
 
 ## Interaction diagram
 
@@ -68,12 +88,16 @@ flowchart TD
 
 ## What each module does
 
-- `main.py` — starts all threads and shuts down the system cleanly
-- `settings.py` — (shared module) settings, constants, prompts, models, states, and safe JSON I/O
-- `vision.py` — captures camera frame (OpenCV) and writes `state.json`
-- `brain.py` — reads `state.json` and `memory.json`, makes decisions via LLM (Ollama), writes `command.json`
-- `controller.py` — executes commands from `command.json` on motors
-- `memory.py` — stores last n commands for decision-making in `brain.py`
+| Module | Description |
+|--------|-------------|
+| `main.py` | Starts all threads and shuts down the system cleanly |
+| `settings.py` | Shared module — settings, constants, prompts, models, states, safe JSON I/O |
+| `vision.py` | Captures camera frame (OpenCV) and writes `state.json` |
+| `brain.py` | Reads `state.json` and `memory.json`, makes decisions via LLM (Ollama), writes `command.json` |
+| `controller.py` | Executes commands from `command.json` on motors |
+| `memory.py` | Stores last n commands for decision-making in `brain.py` |
+
+---
 
 ## Environment setup and run
 
