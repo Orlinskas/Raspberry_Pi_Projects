@@ -9,16 +9,6 @@
 
 Легкая модульная архитектура управления роботом через JSON-файлы.
 
-## Что делает каждый модуль
-
-
-- `main.py` — поднимает все потоки и корректно завершает систему
-- `settings.py` — (shared module) настройки, константы, промпты, модели, стейты и безопасный JSON I/O
-- `vision.py` — захватывает кадр камеры (OpenCV) и пишет `state.json`
-- `brain.py` — читает `state.json` и `memory.json`, принимает решение через LLM (via Ollama), пишет `command.json`
-- `controller.py` — исполняет команду из `command.json` на моторах
-- `memory.py` — хранит последние n-команд для принятия решений в `brain.py`
-
 ## Схема взаимодействия
 
 ```mermaid
@@ -31,6 +21,44 @@ flowchart LR
     memory -->|"write"| memoryJSON["memory.json"]
     memoryJSON --> brain["brain.py"]
 ```
+
+## Упрощенная блок схема 
+
+```mermaid
+flowchart LR
+    Vision --> Brain["brain.py"]
+    Brain --> Controller["controller.py"]
+    Controller --> Memory["memory.py"]
+    Memory --> Brain["brain.py"]
+```
+
+```mermaid
+flowchart TD
+    mainModule["main.py"]
+    visionModule["vision.py"]
+    brainModule["brain.py"]
+    controllerModule["controller.py"]
+    memoryModule["memory.py"]
+
+    mainModule --> visionModule
+    mainModule --> brainModule
+    mainModule --> controllerModule
+    mainModule --> memoryModule
+
+    visionModule --> brainModule
+    brainModule --> controllerModule
+    controllerModule --> memoryModule
+```
+
+## Что делает каждый модуль
+
+
+- `main.py` — поднимает все потоки и корректно завершает систему
+- `settings.py` — (shared module) настройки, константы, промпты, модели, стейты и безопасный JSON I/O
+- `vision.py` — захватывает кадр камеры (OpenCV) и пишет `state.json`
+- `brain.py` — читает `state.json` и `memory.json`, принимает решение через LLM (via Ollama), пишет `command.json`
+- `controller.py` — исполняет команду из `command.json` на моторах
+- `memory.py` — хранит последние n-команд для принятия решений в `brain.py`
 
 ## Видеопоток камеры
 
