@@ -5,8 +5,7 @@
       "command_id": "cmd_000004",
       "action": "STEP_FORWARD",
       "reason": "Safe state, no obstacles, robot at center",
-      "obstacle_cm": null,
-      "ts": 1772240851.139106
+      "obstacle_cm": null
     },
     {
       "state_id": "st_000000",
