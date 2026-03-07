@@ -2,7 +2,9 @@
 
 *Autonomous robot powered by LLM — no scripts, only AI*
 
-**English** · [Русский](README_RU.md)
+**English** · [Русский](guide/README_RU.md) 
+
+[Buying guide (EN)](guide/BUYING_GUIDE.md) 
 
 ---
 

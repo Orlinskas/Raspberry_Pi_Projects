@@ -1,6 +1,8 @@
 # robot_prome_v1
 
-[English](README.md) | **Русский**
+[English](../README.md) | **Русский** 
+
+[Buying guide (EN)](BUYING_GUIDE.md) 
 
 | | |
 |---|---|
