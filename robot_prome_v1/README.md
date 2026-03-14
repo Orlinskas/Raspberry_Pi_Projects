@@ -112,7 +112,7 @@ Project requires Python 3.8 or higher.
 ### 2. Python dependencies
 
 - opencv-python>=4.8.0
-- RPi.GPIO>=0.7.0
+- rpi-lgpio>=0.6.0 (Raspberry Pi 5 compatible GPIO backend)
 - sounddevice>=0.4.6
 - vosk>=0.3.45
 
@@ -139,7 +139,8 @@ ollama list
 On Raspberry Pi add GPIO and install dependencies:
 
 ```bash
-pip install RPi.GPIO
+pip uninstall -y RPi.GPIO
+pip install rpi-lgpio
 ```
 
 ### 4. Voice recognition model (Vosk, Russian)
@@ -179,20 +180,74 @@ python3 main.py --mode manual
 python3 main.py --verbose
 ```
 
+### Raspberry Pi run (via SSH)
+
+If you work on Raspberry Pi over SSH, use this flow:
+
+```bash
+# from your laptop/desktop
+ssh pi@<raspberry_pi_ip>
+
+# on Raspberry Pi
+cd ~/robot_prome_v1
+deactivate 2>/dev/null || true
+rm -rf .venv
+sudo apt update
+sudo apt install -y alsa-utils python3-venv python3-dev libportaudio2 portaudio19-dev
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+or
+```bash
+bash ~/robot_prome_v1/recover_env.sh
+```
+
+Set Russian Vosk model path (required for `microphone.py`):
+
+```bash
+export VOSK_MODEL_PATH=/home/orlinskas/vosk-model-small-ru-0.22
+```
+
+Before every run, make sure venv is active:
+
+```bash
+cd ~/robot_prome_v1
+source .venv/bin/activate
+```
+
+Run all modules through orchestrator:
+
+```bash
+python main.py
+```
+
+Useful modes:
+
+```bash
+python main.py --mode dry
+python main.py --mode manual
+python main.py --verbose
+```
+
+Tip: if you want `VOSK_MODEL_PATH` after every SSH login, add it to `~/.bashrc`.
+
 ### Microphone module (standalone)
 
 Run as a separate independent process:
 
 ```bash
-python3 microphone.py
+python microphone.py
 ```
 
 Useful options:
 
 ```bash
-python3 microphone.py --list-devices
-python3 microphone.py --test
-python3 microphone.py --device-index 2
+python microphone.py --list-devices
+python microphone.py --test
+python microphone.py --test audio
+python microphone.py --device-index 2
 ```
 
 ---

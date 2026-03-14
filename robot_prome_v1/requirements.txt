@@ -1,0 +1,4 @@
+opencv-python>=4.8.0
+rpi-lgpio>=0.6.0
+sounddevice>=0.4.6
+vosk>=0.3.45

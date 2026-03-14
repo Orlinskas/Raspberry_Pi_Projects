@@ -11,8 +11,14 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 import threading
 import time
+import wave
 from pathlib import Path
 from typing import Optional
 
@@ -22,6 +28,7 @@ from settings import (
     read_json,
     zero_state_payload,
 )
+from voice import play_phrase
 
 LOGGER = logging.getLogger("microphone")
 
@@ -68,17 +75,54 @@ def _update_state_command(state_path: Path, command_text: str) -> None:
     atomic_write_json(state_path, state)
 
 
+def _chunk_to_bytes(chunk: object) -> bytes:
+    # Vosk cffi binding expects raw bytes; RawInputStream may return a buffer-like object.
+    if isinstance(chunk, (bytes, bytearray)):
+        return bytes(chunk)
+    if hasattr(chunk, "tobytes"):
+        return chunk.tobytes()
+    return bytes(chunk)
+
+
+def _sample_width_bytes(dtype: str) -> int:
+    mapping = {
+        "int16": 2,
+        "int32": 4,
+        "float32": 4,
+        "uint8": 1,
+    }
+    return mapping.get(str(dtype).lower(), 2)
+
+
+def _venv_hint() -> str:
+    in_venv = hasattr(sys, "base_prefix") and sys.prefix != sys.base_prefix
+    if in_venv:
+        return "Run: pip install -r requirements.txt"
+    return "Activate venv first: source .venv/bin/activate && pip install -r requirements.txt"
+
+
+def _speak_prompt(phrase: str) -> None:
+    prompt = str(phrase).strip()
+    if not prompt:
+        return
+    try:
+        play_phrase(prompt)
+    except Exception as exc:
+        LOGGER.warning("Prompt playback failed: %s", exc)
+
+
 class SpeechRecognizer:
     def __init__(self, config: MicrophoneConfig) -> None:
         self.config = config
         self._model = None
         self._frames_per_chunk = max(200, int(self.config.sample_rate * 0.2))
+        self._active_sample_rate = int(self.config.sample_rate)
 
     def initialize(self) -> None:
         if sd is None:
-            raise RuntimeError("sounddevice not installed. Install with: pip install sounddevice")
+            raise RuntimeError(f"sounddevice not installed. {_venv_hint()}")
         if Model is None or KaldiRecognizer is None:
-            raise RuntimeError("vosk not installed. Install with: pip install vosk")
+            raise RuntimeError(f"vosk not installed. {_venv_hint()}")
 
         model_path = Path(self.config.vosk_model_path).expanduser().resolve()
         if not model_path.exists():
@@ -93,18 +137,58 @@ class SpeechRecognizer:
     def _new_recognizer(self):
         if self._model is None:
             raise RuntimeError("Speech recognizer model is not initialized")
-        recognizer = KaldiRecognizer(self._model, float(self.config.sample_rate))
+        recognizer = KaldiRecognizer(self._model, float(self._active_sample_rate))
         recognizer.SetWords(False)
         return recognizer
 
+    def _candidate_sample_rates(self, device) -> list[int]:
+        candidates: list[int] = [int(self.config.sample_rate)]
+        try:
+            info = sd.query_devices(device, "input")
+            default_sr_raw = info.get("default_samplerate")
+            if default_sr_raw:
+                candidates.append(int(round(float(default_sr_raw))))
+        except Exception:
+            pass
+        candidates.extend([48000, 44100, 32000, 22050, 16000, 8000])
+
+        unique: list[int] = []
+        seen: set[int] = set()
+        for rate in candidates:
+            if rate <= 0 or rate in seen:
+                continue
+            seen.add(rate)
+            unique.append(rate)
+        return unique
+
     def _open_stream(self):
         device = None if self.config.device_index < 0 else self.config.device_index
-        return sd.RawInputStream(
-            samplerate=self.config.sample_rate,
-            blocksize=self._frames_per_chunk,
-            device=device,
-            channels=self.config.channels,
-            dtype=self.config.dtype,
+        last_exc = None
+        for rate in self._candidate_sample_rates(device):
+            try:
+                stream = sd.RawInputStream(
+                    samplerate=rate,
+                    blocksize=max(200, int(rate * 0.2)),
+                    device=device,
+                    channels=self.config.channels,
+                    dtype=self.config.dtype,
+                )
+                self._active_sample_rate = int(rate)
+                self._frames_per_chunk = max(200, int(self._active_sample_rate * 0.2))
+                if self._active_sample_rate != int(self.config.sample_rate):
+                    LOGGER.warning(
+                        "Sample rate %s unsupported by device, using %s",
+                        self.config.sample_rate,
+                        self._active_sample_rate,
+                    )
+                return stream
+            except Exception as exc:
+                last_exc = exc
+                continue
+
+        raise RuntimeError(
+            f"Unable to open microphone stream for device={device}. "
+            f"Tried sample rates: {self._candidate_sample_rates(device)}. Last error: {last_exc}"
         )
 
     def wait_wake_word(self, stream, stop_event: threading.Event) -> bool:
@@ -114,10 +198,11 @@ class SpeechRecognizer:
 
         while not stop_event.is_set() and time.monotonic() < deadline:
             data, overflowed = stream.read(self._frames_per_chunk)
+            pcm = _chunk_to_bytes(data)
             if overflowed:
                 LOGGER.debug("Audio overflow while waiting wake word")
 
-            if recognizer.AcceptWaveform(data):
+            if recognizer.AcceptWaveform(pcm):
                 full_text = _extract_text(recognizer.Result()).lower()
                 if full_text and wake_word in full_text:
                     LOGGER.info("Wake word detected: %s", self.config.wake_word)
@@ -139,9 +224,10 @@ class SpeechRecognizer:
 
         while not stop_event.is_set() and time.monotonic() < deadline:
             data, overflowed = stream.read(self._frames_per_chunk)
+            pcm = _chunk_to_bytes(data)
             if overflowed:
                 LOGGER.debug("Audio overflow while recording command")
-            if recognizer.AcceptWaveform(data):
+            if recognizer.AcceptWaveform(pcm):
                 full_text = _extract_text(recognizer.Result())
                 if full_text:
                     texts.append(full_text)
@@ -198,11 +284,61 @@ def run_test_mode(config: MicrophoneConfig) -> int:
     recognizer = SpeechRecognizer(config)
     recognizer.initialize()
 
+    _speak_prompt(config.test_start_prompt)
     LOGGER.info("Test mode: recording %.1f seconds", config.command_record_s)
     with recognizer._open_stream() as stream:
         text = recognizer.record_command(stream, threading.Event())
+    _speak_prompt(config.test_done_stt_prompt)
     LOGGER.info("Test recognized text: %s", text or "<empty>")
     print(text)
+    return 0
+
+
+def run_test_audio_mode(config: MicrophoneConfig) -> int:
+    if sd is None:
+        raise RuntimeError(f"sounddevice not installed. {_venv_hint()}")
+    if not shutil.which("aplay"):
+        raise RuntimeError("aplay not found. Install with: sudo apt install alsa-utils")
+
+    recorder = SpeechRecognizer(config)
+    chunks: list[bytes] = []
+    _speak_prompt(config.test_start_prompt)
+    LOGGER.info("Audio test mode: recording %.1f seconds", config.command_record_s)
+    with recorder._open_stream() as stream:
+        deadline = time.monotonic() + config.command_record_s
+        while time.monotonic() < deadline:
+            data, overflowed = stream.read(recorder._frames_per_chunk)
+            if overflowed:
+                LOGGER.debug("Audio overflow in test audio mode")
+            chunks.append(_chunk_to_bytes(data))
+
+    pcm_bytes = b"".join(chunks)
+    if not pcm_bytes:
+        LOGGER.warning("Audio test mode: empty recording")
+        return 1
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+        wav_path = handle.name
+    try:
+        with wave.open(wav_path, "wb") as wav_file:
+            wav_file.setnchannels(max(1, int(config.channels)))
+            wav_file.setsampwidth(_sample_width_bytes(config.dtype))
+            wav_file.setframerate(int(config.sample_rate))
+            wav_file.writeframes(pcm_bytes)
+
+        _speak_prompt(config.test_done_audio_prompt)
+        LOGGER.info("Audio test mode: playing recorded audio")
+        subprocess.run(
+            ["aplay", "-q", wav_path],
+            timeout=float(config.test_audio_play_timeout_s),
+            check=False,
+            capture_output=True,
+        )
+    finally:
+        if os.path.exists(wav_path):
+            os.unlink(wav_path)
+
+    LOGGER.info("Audio test mode finished")
     return 0
 
 
@@ -210,8 +346,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Microfone module: Vosk speech recognition")
     parser.add_argument(
         "--test",
-        action="store_true",
-        help="Test mode: record one command window and print recognized text",
+        nargs="?",
+        const="stt",
+        choices=["stt", "audio"],
+        metavar="MODE",
+        help="Test mode: --test or --test stt for speech-to-text, --test audio for microphone-to-speaker loopback",
     )
     parser.add_argument(
         "--list-devices",
@@ -264,13 +403,16 @@ def main() -> None:
 
     if args.list_devices:
         if sd is None:
-            raise RuntimeError("sounddevice not installed. Install with: pip install sounddevice")
+            raise RuntimeError(f"sounddevice not installed. {_venv_hint()}")
         print(sd.query_devices())
         return
 
     config = build_config_from_args(args)
     if args.test:
-        run_test_mode(config)
+        if args.test == "audio":
+            run_test_audio_mode(config)
+        else:
+            run_test_mode(config)
         return
 
     stop_event = threading.Event()

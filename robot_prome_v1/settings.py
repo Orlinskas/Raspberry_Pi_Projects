@@ -385,7 +385,7 @@ ERROR_BLINK_OFF_S = 0.15
 # ---------------------------------------------------------------------------
 
 MEMORY_POLL_WAIT_S = 0.1
-MEMORY_MAX_ENTRIES = 10
+MEMORY_MAX_ENTRIES = 5
 
 
 @dataclass
@@ -401,17 +401,21 @@ class MemoryConfig:
 # ---------------------------------------------------------------------------
 
 MICROPHONE_POLL_WAIT_S = 0.05
-MICROPHONE_SAMPLE_RATE = 16000
+MICROPHONE_SAMPLE_RATE = 44100
 MICROPHONE_CHANNELS = 1
 MICROPHONE_DTYPE = "int16"
 MICROPHONE_WAKE_WORD = "робот"
 MICROPHONE_WAKE_WINDOW_S = 1.0
 MICROPHONE_COMMAND_RECORD_S = 4.0
 MICROPHONE_MIN_COMMAND_CHARS = 2
-MICROPHONE_DEVICE_INDEX = -1  # -1 means default input device
-MICROPHONE_VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", str(ROOT / "models" / "vosk-ru"))
+MICROPHONE_DEVICE_INDEX = 1  # -1 means default input device
+MICROPHONE_VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", str(ROOT / "vosk-model-small-ru-0.22"))
 MICROPHONE_LOG_PARTIAL_RESULTS = False
 MICROPHONE_RETRY_DELAY_S = 5.0
+MICROPHONE_TEST_AUDIO_PLAY_TIMEOUT_S = 10.0
+MICROPHONE_TEST_START_PROMPT = "Записываю"
+MICROPHONE_TEST_DONE_STT_PROMPT = "Запись завершена"
+MICROPHONE_TEST_DONE_AUDIO_PROMPT = "Запись завершена. Проигрываю"
 
 
 @dataclass
@@ -429,4 +433,8 @@ class MicrophoneConfig:
     vosk_model_path: str = MICROPHONE_VOSK_MODEL_PATH
     log_partial_results: bool = MICROPHONE_LOG_PARTIAL_RESULTS
     retry_delay_s: float = MICROPHONE_RETRY_DELAY_S
+    test_audio_play_timeout_s: float = MICROPHONE_TEST_AUDIO_PLAY_TIMEOUT_S
+    test_start_prompt: str = MICROPHONE_TEST_START_PROMPT
+    test_done_stt_prompt: str = MICROPHONE_TEST_DONE_STT_PROMPT
+    test_done_audio_prompt: str = MICROPHONE_TEST_DONE_AUDIO_PROMPT
 

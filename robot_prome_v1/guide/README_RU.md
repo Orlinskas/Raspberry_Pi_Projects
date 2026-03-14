@@ -95,9 +95,10 @@ flowchart TD
 ### 2. Зависимости Python
 
 - opencv-python>=4.8.0
-- RPi.GPIO>=0.7.0
+- rpi-lgpio>=0.6.0 (совместимый GPIO backend для Raspberry Pi 5)
 - sounddevice>=0.4.6
 - vosk>=0.3.45
+- `aplay` (системная утилита из пакета `alsa-utils`, нужна для `microphone.py --test audio`)
 
 ### 3. Ollama (LLM для brain)
 
@@ -121,7 +122,8 @@ ollama list
 На Raspberry Pi добавьте GPIO и установите зависимости:
 
 ```bash
-pip install RPi.GPIO
+pip uninstall -y RPi.GPIO
+pip install rpi-lgpio
 ```
 
 ### 4. Модель распознавания речи (Vosk, русский)
@@ -161,20 +163,102 @@ python3 main.py --mode manual
 python3 main.py --verbose
 ```
 
+### Запуск на Raspberry Pi по SSH
+
+Если вы подключаетесь к Raspberry Pi по SSH, используйте такой порядок:
+
+```bash
+# на вашем ноутбуке/ПК
+ssh pi@<ip_вашего_raspberry_pi>
+
+# уже на Raspberry Pi
+cd ~/robot_prome_v1
+deactivate 2>/dev/null || true
+rm -rf .venv
+sudo apt update
+sudo apt install -y alsa-utils python3-venv python3-dev libportaudio2 portaudio19-dev
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+or
+```bash
+source ~/robot_prome_v1/recover_env.sh
+```
+
+Укажите путь к русской модели Vosk (обязательно для `microphone.py`):
+
+```bash
+export VOSK_MODEL_PATH=/home/orlinskas/vosk-model-small-ru-0.22
+```
+
+Перед каждым запуском убедитесь, что активировано виртуальное окружение:
+
+```bash
+cd ~/robot_prome_v1
+source .venv/bin/activate
+```
+
+Запуск всех модулей через оркестратор:
+
+```bash
+python main.py
+```
+
+Полезные режимы:
+
+```bash
+python main.py --mode dry
+python main.py --mode manual
+python main.py --verbose
+```
+
+Совет: чтобы `VOSK_MODEL_PATH` не задавать после каждого SSH-входа, добавьте export в `~/.bashrc`.
+
+### Быстрое восстановление после обновления кода (Raspberry Pi)
+
+Если после копирования новой версии проекта появляется ошибка `.venv/bin/python: No such file or directory`, выполните полный сброс окружения:
+
+```bash
+# на Raspberry Pi в папке проекта
+cd ~/robot_prome_v1
+deactivate 2>/dev/null || true
+rm -rf .venv
+sudo apt update
+sudo apt install -y alsa-utils python3-venv python3-dev libportaudio2 portaudio19-dev
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+export VOSK_MODEL_PATH=/home/pi/vosk-model-small-ru-0.22
+```
+
+Проверка:
+
+```bash
+which python
+python --version
+ls -la .venv/bin/python
+python3 microphone.py --test audio
+python3 main.py --mode dry
+```
+
 ### Модуль микрофона (отдельный запуск)
 
 Независимый запуск отдельным процессом:
 
 ```bash
-python3 microphone.py
+python microphone.py
 ```
 
 Полезные параметры:
 
 ```bash
-python3 microphone.py --list-devices
-python3 microphone.py --test
-python3 microphone.py --device-index 2
+python microphone.py --list-devices
+python microphone.py --test
+python microphone.py --test audio
+python microphone.py --device-index 2
 ```
 
 ---
