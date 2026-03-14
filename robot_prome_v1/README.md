@@ -111,10 +111,12 @@ Project requires Python 3.8 or higher.
 
 ### 2. Python dependencies
 
-- opencv-python>=4.8.0
-- rpi-lgpio>=0.6.0 (Raspberry Pi 5 compatible GPIO backend)
-- sounddevice>=0.4.6
-- vosk>=0.3.45
+Install system packages on Raspberry Pi:
+
+- python3-opencv
+- python3-rpi-lgpio (Raspberry Pi 5 compatible GPIO backend)
+- sounddevice (installed via pip)
+- vosk (installed via pip)
 
 ### 3. Ollama (LLM for brain)
 
@@ -139,8 +141,7 @@ ollama list
 On Raspberry Pi add GPIO and install dependencies:
 
 ```bash
-pip uninstall -y RPi.GPIO
-pip install rpi-lgpio
+sudo apt install -y python3-rpi-lgpio
 ```
 
 ### 4. Voice recognition model (Vosk, Russian)
@@ -171,18 +172,18 @@ python main.py --mode dry
 **Manual keyboard control (brain disabled), camera stream in browser:**
 
 ```bash
-python3 main.py --mode manual
+python main.py --mode manual
 ```
 
 **Verbose LLM logs:**
 
 ```bash
-python3 main.py --verbose
+python main.py --verbose
 ```
 
 ### Raspberry Pi run (via SSH)
 
-If you work on Raspberry Pi over SSH, use this flow:
+If you work on Raspberry Pi over SSH, use this flow :
 
 ```bash
 # from your laptop/desktop
@@ -190,16 +191,24 @@ ssh pi@<raspberry_pi_ip>
 
 # on Raspberry Pi
 cd ~/robot_prome_v1
-deactivate 2>/dev/null || true
-rm -rf .venv
 sudo apt update
-sudo apt install -y alsa-utils python3-venv python3-dev libportaudio2 portaudio19-dev
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+sudo apt install -y \
+  python3-opencv \
+  python3-rpi-lgpio \
+  python3-pip \
+  espeak-ng \
+  alsa-utils \
+  v4l-utils \
+  python3-dev \
+  libportaudio2 \
+  portaudio19-dev
+
+python -m pip install --break-system-packages --upgrade pip
+python -m pip install --break-system-packages sounddevice vosk
 ```
-or
+
+Or run the same setup with one command:
+
 ```bash
 bash ~/robot_prome_v1/recover_env.sh
 ```
@@ -208,13 +217,6 @@ Set Russian Vosk model path (required for `microphone.py`):
 
 ```bash
 export VOSK_MODEL_PATH=/home/orlinskas/vosk-model-small-ru-0.22
-```
-
-Before every run, make sure venv is active:
-
-```bash
-cd ~/robot_prome_v1
-source .venv/bin/activate
 ```
 
 Run all modules through orchestrator:
@@ -264,7 +266,7 @@ When running with a camera (OpenCV), an MJPEG server starts automatically. Open 
   ========================================================
 ```
 
-- Default port: `8765`. Change with: `python3 main.py --stream-port 9000`
+- Default port: `8765`. Change with: `python main.py --stream-port 9000`
 - Stream uses frames from the main vision loop and does not affect robot operation
 
 ## For contributors

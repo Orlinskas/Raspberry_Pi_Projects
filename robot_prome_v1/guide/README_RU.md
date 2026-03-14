@@ -94,11 +94,12 @@ flowchart TD
 
 ### 2. Зависимости Python
 
-- opencv-python>=4.8.0
-- rpi-lgpio>=0.6.0 (совместимый GPIO backend для Raspberry Pi 5)
-- sounddevice>=0.4.6
-- vosk>=0.3.45
-- `aplay` (системная утилита из пакета `alsa-utils`, нужна для `microphone.py --test audio`)
+Установите системные пакеты на Raspberry Pi:
+
+- python3-opencv
+- python3-rpi-lgpio (совместимый GPIO backend для Raspberry Pi 5)
+- sounddevice (устанавливается через pip)
+- vosk (устанавливается через pip)
 
 ### 3. Ollama (LLM для brain)
 
@@ -122,8 +123,7 @@ ollama list
 На Raspberry Pi добавьте GPIO и установите зависимости:
 
 ```bash
-pip uninstall -y RPi.GPIO
-pip install rpi-lgpio
+sudo apt install -y python3-rpi-lgpio
 ```
 
 ### 4. Модель распознавания речи (Vosk, русский)
@@ -154,13 +154,13 @@ python main.py --mode dry
 **Ручное управление с клавиатуры (brain отключён) можно смотреть стрим с камеры в браузере:**
 
 ```bash
-python3 main.py --mode manual
+python main.py --mode manual
 ```
 
 **Подробные логи LLM:**
 
 ```bash
-python3 main.py --verbose
+python main.py --verbose
 ```
 
 ### Запуск на Raspberry Pi по SSH
@@ -173,31 +173,30 @@ ssh pi@<ip_вашего_raspberry_pi>
 
 # уже на Raspberry Pi
 cd ~/robot_prome_v1
-deactivate 2>/dev/null || true
-rm -rf .venv
 sudo apt update
-sudo apt install -y alsa-utils python3-venv python3-dev libportaudio2 portaudio19-dev
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+sudo apt install -y \
+  python3-opencv \
+  python3-rpi-lgpio \
+  python3-pip \
+  espeak-ng \
+  alsa-utils \
+  v4l-utils \
+  python3-dev \
+  libportaudio2 \
+  portaudio19-dev
+
+python -m pip install --break-system-packages --upgrade pip
+python -m pip install --break-system-packages sounddevice vosk
 ```
-or
+или
 ```bash
-source ~/robot_prome_v1/recover_env.sh
+bash ~/robot_prome_v1/recover_env.sh
 ```
 
 Укажите путь к русской модели Vosk (обязательно для `microphone.py`):
 
 ```bash
 export VOSK_MODEL_PATH=/home/orlinskas/vosk-model-small-ru-0.22
-```
-
-Перед каждым запуском убедитесь, что активировано виртуальное окружение:
-
-```bash
-cd ~/robot_prome_v1
-source .venv/bin/activate
 ```
 
 Запуск всех модулей через оркестратор:
@@ -215,34 +214,6 @@ python main.py --verbose
 ```
 
 Совет: чтобы `VOSK_MODEL_PATH` не задавать после каждого SSH-входа, добавьте export в `~/.bashrc`.
-
-### Быстрое восстановление после обновления кода (Raspberry Pi)
-
-Если после копирования новой версии проекта появляется ошибка `.venv/bin/python: No such file or directory`, выполните полный сброс окружения:
-
-```bash
-# на Raspberry Pi в папке проекта
-cd ~/robot_prome_v1
-deactivate 2>/dev/null || true
-rm -rf .venv
-sudo apt update
-sudo apt install -y alsa-utils python3-venv python3-dev libportaudio2 portaudio19-dev
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-export VOSK_MODEL_PATH=/home/pi/vosk-model-small-ru-0.22
-```
-
-Проверка:
-
-```bash
-which python
-python --version
-ls -la .venv/bin/python
-python3 microphone.py --test audio
-python3 main.py --mode dry
-```
 
 ### Модуль микрофона (отдельный запуск)
 
@@ -275,7 +246,7 @@ python microphone.py --device-index 2
   ========================================================
 ```
 
-- Порт по умолчанию: `8765`. Можно изменить: `python3 main.py --stream-port 9000`
+- Порт по умолчанию: `8765`. Можно изменить: `python main.py --stream-port 9000`
 - Поток использует кадры из основного vision-цикла и не влияет на работу робота
 
 ## Друзьям
