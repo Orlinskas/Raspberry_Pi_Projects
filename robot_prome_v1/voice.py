@@ -18,7 +18,7 @@ import threading
 from pathlib import Path
 from typing import Optional, Union
 
-from settings import AUDIO_PLAYBACK_AMPLITUDE, read_json
+from settings import AUDIO_PLAYBACK_AMPLITUDE, VOICE_MUTE_EVENT, read_json
 
 LOGGER = logging.getLogger("voice")
 
@@ -156,6 +156,10 @@ def run_voice_loop(
         command_id = str(raw.get("command_id", ""))
         if command_id != last_command_id:
             last_command_id = command_id
+            if VOICE_MUTE_EVENT.is_set():
+                LOGGER.info("Voice muted while command listening is active")
+                stop_event.wait(poll_interval_s)
+                continue
             voice_raw = raw.get("voice")
             voice = (str(voice_raw).strip() if voice_raw is not None else "") or None
             if voice:

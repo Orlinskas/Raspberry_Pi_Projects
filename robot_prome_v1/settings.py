@@ -263,19 +263,18 @@ def get_brain_system_prompt() -> str:
 
 You receive:
 1. An image from the robot's front camera (what the robot sees ahead)
-2. sensor.obstacle_cm — distance to the nearest obstacle in front, in cm (null if unavailable). Safe distance: >= 50 cm. Below 50 cm — be cautious (turn away or back up).
+2. sensor.obstacle_cm — distance to the nearest obstacle in front, in cm. Safe distance: >= 50 cm. Below 50 cm — be cautious (turn away or back up).
 3. recent_actions — list of your last actions (state_id, action, reason, obstacle_cm, voice). Use this to avoid repetitive loops.
 4. command — command from the creator. Need to be executed urgently.
 
 Output ONLY a JSON object with keys: action, reason, voice. Allowed action values: {allowed_actions}
 Do not add markdown, comments, or extra keys.
-- **voice** : a short phrase or comment on Russian about the current situation.
 
 **JSON Example:**
 {{
   "action": "LIGHT_OFF",
-  "reason": "No image available",
-  "voice": "Some phrase on Russian"
+  "reason": "Describe why you did something shortly",
+  "voice": "A short phrase or comment on Russian about the current situation"
 }}
 
 ## Commands
@@ -299,7 +298,7 @@ Do not add markdown, comments, or extra keys.
    - Combine the image and sensor.obstacle_cm to assess the situation. Obstacles in the image (wall, furniture, chair, legs, person) and low distance readings both suggest caution — turn away or back up.
    - Obstacle on left → consider TURN_RIGHT. Obstacle on right → consider TURN_LEFT. Obstacle center → TURN_LEFT or TURN_RIGHT.
 
-2. **Target seeking (when obstacle_cm >= 50 or null):**
+2. **Target seeking (when obstacle_cm >= 50):**
    - Goal: keep the {TARGET} in the center of the image. If the {TARGET} is offset — turn towards it first. Do not drive forward past a {TARGET} that is off-center; you will miss it.
    - {TARGET} on left side → TURN_LEFT_15 or TURN_LEFT_45 (turn until it moves toward center)
    - {TARGET} at center → STEP_FORWARD
@@ -308,10 +307,13 @@ Do not add markdown, comments, or extra keys.
 
 3. **Use recent_actions:** You receive recent_actions (last actions taken). Use this history to avoid loops. Avoid repeating exactly the same **voice** phrase from recent_actions unless it is truly necessary.
 
-4. **Thinking** Keep reasoning short."""
+4. **Command is priority:**
+    - When command received do it immediately
 
+"""
    # - {TARGET} found and close (obstacle_cm < 30 or {TARGET} fills center) → PLAY to celebrate
 
+# 4. **Thinking** Keep reasoning short.
 
 @dataclass
 class BrainConfig:
@@ -384,7 +386,7 @@ ERROR_BLINK_OFF_S = 0.15
 # ---------------------------------------------------------------------------
 
 MEMORY_POLL_WAIT_S = 0.1
-MEMORY_MAX_ENTRIES = 5
+MEMORY_MAX_ENTRIES = 7
 
 
 @dataclass
@@ -399,6 +401,7 @@ class MemoryConfig:
 # Audio playback (voice, microphone)
 # ---------------------------------------------------------------------------
 AUDIO_PLAYBACK_AMPLITUDE = 40
+VOICE_MUTE_EVENT = threading.Event()
 
 # ---------------------------------------------------------------------------
 # Microphone
@@ -409,9 +412,9 @@ MICROPHONE_SAMPLE_RATE = 44100
 MICROPHONE_CHANNELS = 1
 MICROPHONE_DTYPE = "int16"
 MICROPHONE_WAKE_WORD = "робот"
-MICROPHONE_WAKE_WINDOW_S = 1.0
-MICROPHONE_COMMAND_RECORD_S = 4.0
-MICROPHONE_MIN_COMMAND_CHARS = 2
+MICROPHONE_WAKE_WINDOW_S = 2.0
+MICROPHONE_COMMAND_RECORD_S = 5.0
+MICROPHONE_MIN_COMMAND_CHARS = 4
 MICROPHONE_DEVICE_INDEX = 1  # -1 means default input device
 MICROPHONE_VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", str(ROOT / "vosk-model-small-ru-0.22"))
 MICROPHONE_LOG_PARTIAL_RESULTS = False

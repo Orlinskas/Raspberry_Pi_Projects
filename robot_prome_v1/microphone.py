@@ -24,6 +24,7 @@ from typing import Optional
 
 from settings import (
     MicrophoneConfig,
+    VOICE_MUTE_EVENT,
     atomic_write_json,
     read_json,
     zero_state_payload,
@@ -266,19 +267,23 @@ class SpeechRecognizer:
         LOGGER.info("Microphone stopped")
 
     def capture_command_once(self, stream, stop_event: threading.Event) -> Optional[str]:
-        _speak_prompt(self.config.trigger_ack_prompt)
-        LOGGER.info("Command recording started (%.1fs)", self.config.command_record_s)
-        command_text = self.record_command(stream, stop_event)
-        LOGGER.info("Command recording finished")
+        VOICE_MUTE_EVENT.set()
+        try:
+            _speak_prompt(self.config.trigger_ack_prompt)
+            LOGGER.info("Command recording started (%.1fs)", self.config.command_record_s)
+            command_text = self.record_command(stream, stop_event)
+            LOGGER.info("Command recording finished")
 
-        if len(command_text) < max(0, self.config.min_command_chars):
-            LOGGER.info("Command ignored: too short")
-            return None
+            if len(command_text) < max(0, self.config.min_command_chars):
+                LOGGER.info("Command ignored: too short")
+                return None
 
-        _log_received_command("loop", command_text)
-        _update_state_command(self.config.state_path, command_text)
-        LOGGER.info("State updated with command")
-        return command_text
+            _log_received_command("loop", command_text)
+            _update_state_command(self.config.state_path, command_text)
+            LOGGER.info("State updated with command")
+            return command_text
+        finally:
+            VOICE_MUTE_EVENT.clear()
 
 
 def run_microphone_loop(config: MicrophoneConfig, stop_event: Optional[threading.Event] = None) -> None:
