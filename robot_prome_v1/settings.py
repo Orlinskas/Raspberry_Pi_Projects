@@ -274,7 +274,7 @@ Do not add markdown, comments, or extra keys.
 {{
   "action": "LIGHT_OFF",
   "reason": "Describe why you did something shortly",
-  "voice": "A short phrase or comment on Russian about the current situation"
+  "voice": "A phrase or comment on Russian about the current situation. Can be answer for command"
 }}
 
 ## Commands

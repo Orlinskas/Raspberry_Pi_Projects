@@ -63,6 +63,7 @@ class BrainEngine:
         payload: Dict[str, Any] = {
             "state_id": state.state_id,
             "sensor": state.sensor.to_dict(),
+            "command": state.command,
         }
         recent = get_recent_actions(self.config.memory_path, limit=8)
         if recent:
@@ -158,6 +159,24 @@ class BrainEngine:
         LOGGER.info("Ollama %.3fs model=%s", elapsed_s(), self.config.ollama_model)
         return decision
 
+    def clear_consumed_command(self, state: RobotState) -> None:
+        consumed = (state.command or "").strip()
+        if not consumed:
+            return
+        latest_state = read_json(self.config.state_path)
+        if not isinstance(latest_state, dict):
+            return
+
+        # Avoid overwriting newer state written by vision.
+        if str(latest_state.get("state_id", "")) != state.state_id:
+            return
+        if str(latest_state.get("command", "")).strip() != consumed:
+            return
+
+        latest_state["command"] = ""
+        atomic_write_json(self.config.state_path, latest_state)
+        LOGGER.info("Brain consumed and cleared state.command for state_id=%s", state.state_id)
+
     @staticmethod
     def _normalize_llm_decision(payload: Dict[str, Any]) -> Optional[Tuple[str, str, Optional[str]]]:
         action = str(payload.get("action", "")).upper()
@@ -207,6 +226,7 @@ def run_brain_loop(config: BrainConfig, stop_event: Optional[threading.Event] = 
 
         LOGGER.info("Brain deciding state_id=%s", state.state_id)
         command = engine.decide(state)
+        engine.clear_consumed_command(state)
         command_payload = command.to_dict()
         atomic_write_json(config.command_path, command_payload)
         LOGGER.info("COMMAND generated:\n%s", _json_line(command_payload))
