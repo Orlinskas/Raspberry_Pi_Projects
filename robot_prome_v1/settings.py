@@ -252,8 +252,8 @@ class RobotCommand:
 # ---------------------------------------------------------------------------
 
 BRAIN_POLL_WAIT_S = 0.1
-ROBOT_TASK = "Find and talk with a creator"
-TARGET = "Creator"
+ROBOT_TASK = "Explore the world, be creative"
+TARGET = "People"
 
 def get_brain_system_prompt() -> str:
     allowed_actions = ", ".join(ACTIONS)
@@ -265,7 +265,7 @@ You receive:
 1) image: front camera image (may be missing)
 2) sensor.obstacle_cm: distance to nearest front obstacle in cm (can be null)
 3) recent_actions: recent history (state_id, action, reason, obstacle_cm, voice)
-4) command: text command from the creator (can be empty)
+4) command: text command from human (can be empty)
 
 Return ONLY one valid JSON object with keys:
 - action
@@ -356,8 +356,8 @@ CAMERA_WARMUP_S = 1.0
 CAPTURE_KEEP_LAST = 30
 
 STREAM_DEFAULT_PORT = 8765
-STREAM_FPS = float(os.getenv("STREAM_FPS", "30"))  # 15-20 reasonable for Pi
-STREAM_JPEG_QUALITY = int(os.getenv("STREAM_JPEG_QUALITY", "100"))  # 70-95, lower = faster
+STREAM_FPS = float(os.getenv("STREAM_FPS", "30"))
+STREAM_JPEG_QUALITY = int(os.getenv("STREAM_JPEG_QUALITY", "100"))
 
 
 @dataclass
@@ -387,7 +387,7 @@ ERROR_BLINK_OFF_S = 0.15
 # ---------------------------------------------------------------------------
 
 MEMORY_POLL_WAIT_S = 0.1
-MEMORY_MAX_ENTRIES = 4
+MEMORY_MAX_ENTRIES = 10
 
 
 @dataclass

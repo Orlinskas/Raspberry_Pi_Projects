@@ -205,9 +205,37 @@ class BrainEngine:
 
 def run_brain_loop(config: BrainConfig, stop_event: Optional[threading.Event] = None) -> None:
     stop_event = stop_event or threading.Event()
-    engine = BrainEngine(config)
     LOGGER.info("Brain started state=%s command=%s", config.state_path, config.command_path)
-    last_state_id = ""
+    accepted_counter = 0
+    last_submitted_state_id = ""
+
+    class _BrainTask:
+        def __init__(self, task_id: int, state: RobotState) -> None:
+            self.task_id = task_id
+            self.state = state
+            self.engine = BrainEngine(config)
+            self.done = threading.Event()
+            self.command: Optional[RobotCommand] = None
+            self.error: Optional[str] = None
+
+            def _worker() -> None:
+                try:
+                    self.command = self.engine.decide(state)
+                except Exception as exc:  # defensive guard for worker thread
+                    self.error = str(exc)
+                    LOGGER.exception("Brain task failed task_id=%s state_id=%s", self.task_id, state.state_id)
+                finally:
+                    self.done.set()
+
+            self.thread = threading.Thread(
+                target=_worker,
+                name=f"brain-task-{task_id}",
+                daemon=True,
+            )
+            self.thread.start()
+
+    task_seq = 0
+    active_task: Optional[_BrainTask] = None
 
     while not stop_event.is_set():
         raw_state = read_json(config.state_path)
@@ -220,17 +248,56 @@ def run_brain_loop(config: BrainConfig, stop_event: Optional[threading.Event] = 
             stop_event.wait(BRAIN_POLL_WAIT_S)
             continue
 
-        if state.state_id == last_state_id:
+        current_command_text = (state.command or "").strip()
+        has_priority_command = bool(current_command_text)
+
+        if active_task is None:
+            if state.state_id != last_submitted_state_id or has_priority_command:
+                task_seq += 1
+                LOGGER.info("Brain deciding state_id=%s task_id=%s", state.state_id, task_seq)
+                active_task = _BrainTask(task_seq, state)
+                last_submitted_state_id = state.state_id
             stop_event.wait(BRAIN_POLL_WAIT_S)
             continue
 
-        LOGGER.info("Brain deciding state_id=%s", state.state_id)
-        command = engine.decide(state)
-        engine.clear_consumed_command(state)
-        command_payload = command.to_dict()
-        atomic_write_json(config.command_path, command_payload)
-        LOGGER.info("COMMAND generated:\n%s", _json_line(command_payload))
-        last_state_id = state.state_id
+        active_command_text = (active_task.state.command or "").strip()
+        should_preempt = (
+            has_priority_command
+            and not active_task.done.is_set()
+            and (state.state_id != active_task.state.state_id or current_command_text != active_command_text)
+        )
+        if should_preempt:
+            task_seq += 1
+            LOGGER.info("Brain ignored stale task_id=%s", active_task.task_id)
+            LOGGER.info(
+                "Brain preempting task_id=%s with task_id=%s state_id=%s due to new command",
+                active_task.task_id,
+                task_seq,
+                state.state_id,
+            )
+            active_task = _BrainTask(task_seq, state)
+            last_submitted_state_id = state.state_id
+
+        if active_task.done.is_set():
+            command = active_task.command
+            if command is None:
+                command = RobotCommand(
+                    command_id="",
+                    based_on_state_id=active_task.state.state_id,
+                    action="ERROR",
+                    reason="brain_task_failed",
+                )
+
+            accepted_counter += 1
+            command.command_id = f"cmd_{accepted_counter:06d}"
+            command.based_on_state_id = active_task.state.state_id
+            command_payload = command.to_dict()
+            atomic_write_json(config.command_path, command_payload)
+            LOGGER.info("COMMAND generated:\n%s", _json_line(command_payload))
+            active_task.engine.clear_consumed_command(active_task.state)
+            active_task = None
+
+        stop_event.wait(BRAIN_POLL_WAIT_S)
 
     LOGGER.info("Brain stopped")
 
