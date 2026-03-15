@@ -228,7 +228,6 @@ class SpeechRecognizer:
                     LOGGER.info("Wake word detected: %s", self.config.wake_word)
                     return True
 
-        LOGGER.info("Wake search finished: trigger not detected in this window")
         return False
 
     def record_command(self, stream, stop_event: threading.Event) -> str:

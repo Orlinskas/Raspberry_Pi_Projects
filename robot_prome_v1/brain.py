@@ -167,9 +167,6 @@ class BrainEngine:
         if not isinstance(latest_state, dict):
             return
 
-        # Avoid overwriting newer state written by vision.
-        if str(latest_state.get("state_id", "")) != state.state_id:
-            return
         if str(latest_state.get("command", "")).strip() != consumed:
             return
 
@@ -264,7 +261,7 @@ def run_brain_loop(config: BrainConfig, stop_event: Optional[threading.Event] = 
         should_preempt = (
             has_priority_command
             and not active_task.done.is_set()
-            and (state.state_id != active_task.state.state_id or current_command_text != active_command_text)
+            and current_command_text != active_command_text
         )
         if should_preempt:
             task_seq += 1
