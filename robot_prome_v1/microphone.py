@@ -213,17 +213,22 @@ class SpeechRecognizer:
 
             if recognizer.AcceptWaveform(pcm):
                 full_text = _extract_text(recognizer.Result()).lower()
+                if full_text:
+                    LOGGER.info("Wake window full text: %s", full_text)
                 if full_text and wake_word in full_text:
                     LOGGER.info("Wake word detected: %s", self.config.wake_word)
                     return True
             else:
                 partial_text = _extract_partial_text(recognizer.PartialResult()).lower()
+                if partial_text:
+                    LOGGER.info("Wake window partial text: %s", partial_text)
                 if self.config.log_partial_results and partial_text:
                     LOGGER.debug("Wake partial: %s", partial_text)
                 if partial_text and wake_word in partial_text:
                     LOGGER.info("Wake word detected: %s", self.config.wake_word)
                     return True
 
+        LOGGER.info("Wake search finished: trigger not detected in this window")
         return False
 
     def record_command(self, stream, stop_event: threading.Event) -> str:
