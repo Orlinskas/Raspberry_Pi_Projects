@@ -253,8 +253,8 @@ class RobotCommand:
 # ---------------------------------------------------------------------------
 
 BRAIN_POLL_WAIT_S = 0.1
-ROBOT_TASK = "Explore the world, be creative"
-TARGET = "People"
+ROBOT_TASK = "Explore the world, be creative, survive"
+TARGET = "Target"
 
 def get_brain_system_prompt() -> str:
     allowed_actions = ", ".join(ACTIONS)
