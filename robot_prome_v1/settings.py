@@ -253,8 +253,8 @@ class RobotCommand:
 # ---------------------------------------------------------------------------
 
 BRAIN_POLL_WAIT_S = 0.1
-ROBOT_TASK = "Explore the world, be creative, survive"
-TARGET = "Target"
+ROBOT_TASK = "Find and play with people"
+TARGET = "People"
 
 def get_brain_system_prompt() -> str:
     allowed_actions = ", ".join(ACTIONS)
@@ -419,7 +419,7 @@ MICROPHONE_POLL_WAIT_S = 0.1
 MICROPHONE_SAMPLE_RATE = 44100
 MICROPHONE_CHANNELS = 1
 MICROPHONE_DTYPE = "int16"
-MICROPHONE_WAKE_WORD = "робот"
+MICROPHONE_WAKE_WORD = "рыба"
 MICROPHONE_WAKE_WINDOW_S = 2.0
 MICROPHONE_COMMAND_RECORD_S = 5.0
 MICROPHONE_MIN_COMMAND_CHARS = 4

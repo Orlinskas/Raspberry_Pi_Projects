@@ -336,8 +336,7 @@ def execute_command(command: RobotCommand) -> None:
             cycles=PLAY_CYCLES,
         )
     elif action == "KILL":
-        stop()
-        kill(
+        play(
             phase_duration_s=PLAY_PHASE_DURATION_S,
             speed=speed,
             cycles=PLAY_CYCLES,
