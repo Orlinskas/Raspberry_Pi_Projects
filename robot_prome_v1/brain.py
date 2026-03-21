@@ -38,6 +38,15 @@ def _json_line(payload) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
 
 
+def _is_bootstrap_state(state: RobotState) -> bool:
+    return (
+        state.state_id == "st_000000"
+        and not (state.camera.image_path or "").strip()
+        and (state.command or "").strip() == ""
+        and state.sensor.obstacle_cm is None
+    )
+
+
 class BrainEngine:
     def __init__(self, config: BrainConfig) -> None:
         self.config = config
@@ -234,6 +243,14 @@ def run_brain_loop(config: BrainConfig, stop_event: Optional[threading.Event] = 
     task_seq = 0
     active_task: Optional[_BrainTask] = None
 
+    def _start_task(state: RobotState, reason: str) -> _BrainTask:
+        nonlocal task_seq, last_submitted_state_id
+        task_seq += 1
+        LOGGER.info("Brain deciding state_id=%s task_id=%s reason=%s", state.state_id, task_seq, reason)
+        task = _BrainTask(task_seq, state)
+        last_submitted_state_id = state.state_id
+        return task
+
     while not stop_event.is_set():
         raw_state = read_json(config.state_path)
         if not isinstance(raw_state, dict):
@@ -244,38 +261,50 @@ def run_brain_loop(config: BrainConfig, stop_event: Optional[threading.Event] = 
         if not state.state_id:
             stop_event.wait(BRAIN_POLL_WAIT_S)
             continue
+        if _is_bootstrap_state(state) and active_task is None:
+            stop_event.wait(BRAIN_POLL_WAIT_S)
+            continue
 
         current_command_text = (state.command or "").strip()
         has_priority_command = bool(current_command_text)
 
         if active_task is None:
             if state.state_id != last_submitted_state_id or has_priority_command:
-                task_seq += 1
-                LOGGER.info("Brain deciding state_id=%s task_id=%s", state.state_id, task_seq)
-                active_task = _BrainTask(task_seq, state)
-                last_submitted_state_id = state.state_id
+                active_task = _start_task(state, "new_state" if state.state_id != last_submitted_state_id else "priority_command")
             stop_event.wait(BRAIN_POLL_WAIT_S)
             continue
 
         active_command_text = (active_task.state.command or "").strip()
-        should_preempt = (
+        has_newer_state = state.state_id != active_task.state.state_id
+        should_preempt_for_command = (
             has_priority_command
             and not active_task.done.is_set()
             and current_command_text != active_command_text
         )
-        if should_preempt:
-            task_seq += 1
+        should_preempt_for_state = has_newer_state and not active_task.done.is_set()
+        if should_preempt_for_command or should_preempt_for_state:
             LOGGER.info("Brain ignored stale task_id=%s", active_task.task_id)
-            LOGGER.info(
-                "Brain preempting task_id=%s with task_id=%s state_id=%s due to new command",
-                active_task.task_id,
-                task_seq,
-                state.state_id,
-            )
-            active_task = _BrainTask(task_seq, state)
-            last_submitted_state_id = state.state_id
+            reason = "new_command" if should_preempt_for_command else "newer_state"
+            active_task = _start_task(state, reason)
 
         if active_task.done.is_set():
+            is_stale_completed_task = (
+                state.state_id != active_task.state.state_id
+                or (
+                    has_priority_command
+                    and current_command_text != active_command_text
+                )
+            )
+            if is_stale_completed_task:
+                LOGGER.info(
+                    "Brain discarded completed stale task_id=%s task_state=%s current_state=%s",
+                    active_task.task_id,
+                    active_task.state.state_id,
+                    state.state_id,
+                )
+                active_task = None
+                continue
+
             command = active_task.command
             if command is None:
                 command = RobotCommand(
