@@ -403,7 +403,7 @@ class MemoryConfig:
 # ---------------------------------------------------------------------------
 # Audio playback (voice, microphone)
 # ---------------------------------------------------------------------------
-AUDIO_PLAYBACK_AMPLITUDE = 200
+AUDIO_PLAYBACK_AMPLITUDE = 150
 VOICE_MUTE_EVENT = threading.Event()
 
 # ---------------------------------------------------------------------------
@@ -418,7 +418,7 @@ MICROPHONE_WAKE_WORD = "рыба"
 MICROPHONE_WAKE_WINDOW_S = 2.0
 MICROPHONE_COMMAND_RECORD_S = 5.0
 MICROPHONE_MIN_COMMAND_CHARS = 4
-MICROPHONE_DEVICE_INDEX = -1  # -1 means default input device
+MICROPHONE_DEVICE_INDEX = 2  # -1 means default input device
 MICROPHONE_VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", str(ROOT / "vosk-model-small-ru-0.22"))
 MICROPHONE_LOG_PARTIAL_RESULTS = False
 MICROPHONE_RETRY_DELAY_S = 5.0
